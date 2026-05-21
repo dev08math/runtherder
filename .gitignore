@@ -32,6 +32,7 @@ models/
 *.sqlite
 *.qdrep
 
-.vscode/*
+.vscode/
+.cache/
 
 .env
