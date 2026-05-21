@@ -27,11 +27,39 @@ target_include_directories(runtherder_headers INTERFACE
 )
 target_compile_features(runtherder_headers INTERFACE cxx_std_20)
 
+add_library(runtherder_kernels STATIC
+    src/kernels/rmsnorm.cu
+)
+set_target_properties(runtherder_kernels PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    POSITION_INDEPENDENT_CODE ON
+)
+target_link_libraries(runtherder_kernels PUBLIC runtherder_headers)
+
 add_executable(runtherder main.cpp)
 set_target_properties(runtherder PROPERTIES
     LANGUAGE CUDA
     CUDA_SEPARABLE_COMPILATION ON
 )
 set_source_files_properties(main.cpp PROPERTIES LANGUAGE CUDA)
-target_link_libraries(runtherder PRIVATE runtherder_headers)
+target_link_libraries(runtherder PRIVATE
+    runtherder_headers
+    runtherder_kernels
+)
+
+option(RUNTHERDER_BUILD_TESTS "Build runtherder tests" ON)
+
+if(RUNTHERDER_BUILD_TESTS)
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG        v1.17.0
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
