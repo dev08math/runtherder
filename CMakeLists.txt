@@ -49,10 +49,32 @@ target_link_libraries(runtherder PRIVATE
     runtherder_kernels
 )
 
+include(FetchContent)
+
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.12.0
+    GIT_SHALLOW    TRUE
+)
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(nlohmann_json)
+
+add_library(runtherder_model STATIC
+    src/model/safetensors.cpp
+    src/model/sharded_safetensors.cpp
+)
+set_target_properties(runtherder_model PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+target_link_libraries(runtherder_model
+    PUBLIC  runtherder_headers
+    PRIVATE nlohmann_json::nlohmann_json
+)
+
 option(RUNTHERDER_BUILD_TESTS "Build runtherder tests" ON)
 
 if(RUNTHERDER_BUILD_TESTS)
-    include(FetchContent)
     FetchContent_Declare(
         googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
