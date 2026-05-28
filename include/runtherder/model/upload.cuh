@@ -1,24 +1,36 @@
 #pragma once
 
-#include <cuda_runtime.h>
+#include <cstddef>
+#include <functional>
+#include <string>
+#include <unordered_map>
 
-#include <string_view>
-
+#include <runtherder/device/memory.cuh>
 #include <runtherder/model/sharded_safetensors.h>
 #include <runtherder/model/weights.h>
+#include <runtherder/string_hash.h>
 
 namespace runtherder::model {
 
+using ByName = std::unordered_map<std::string, Tensor, TransparentStringHash, std::equal_to<>>;
+
 /**
- * @brief Upload one tensor's raw bytes from the shard reader into device memory.
- * @pre name exists in sf. A missing name exits via RUNTHERDER_CHECK in the reader.
- * @note The host to device copy is queued on stream. The returned Tensor data is
- *       not valid until stream is synchronized.
- * @note Plain byte copy. shape and dtype carry through from the reader and quant
- *       stays empty.
+ * @brief Result of an architecture agnostic upload of every tensor in a
+ *        reader into one device slab.
+ * @note arena owns the slab. Every Tensor in by_name is a span into it and
+ *       is invalidated when arena is freed.
  */
-[[nodiscard]] Tensor upload_tensor(const ShardedSafetensors& sf,
-                                   std::string_view name,
-                                   cudaStream_t stream);
+struct Uploaded {
+    device::DeviceUniquePtr<std::byte>  arena;
+    ByName                              by_name;
+};
+
+/**
+ * @brief Copies every tensor in reader into a single device slab.
+ * @note Internal to family loaders. Architecture aware arrangement of the
+ *       returned by_name into a typed weights graph lives in each family's
+ *       own loader.
+ */
+[[nodiscard]] Uploaded upload_all(const ShardedSafetensors& reader);
 
 }  // namespace runtherder::model

@@ -49,13 +49,17 @@ public:
     [[nodiscard]] const std::vector<std::string>& tensor_names() const noexcept;
 
 private:
-    ShardedSafetensors() = default;
+    using NameToShard = std::unordered_map<std::string, std::size_t, TransparentStringHash, std::equal_to<>>;
+
+    ShardedSafetensors(std::vector<SafetensorsFile> shards,
+                       std::vector<std::string>     names,
+                       NameToShard                  name_to_shard) noexcept;
 
     [[nodiscard]] const SafetensorsFile& shard_of(std::string_view name) const;
 
-    std::vector<SafetensorsFile>                 shards_;
-    std::vector<std::string>                     names_;
-    std::unordered_map<std::string, std::size_t> name_to_shard_;
+    std::vector<SafetensorsFile>  shards_;
+    std::vector<std::string>      names_;
+    NameToShard                   name_to_shard_;
 };
 
 }  // namespace runtherder::model

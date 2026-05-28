@@ -5,47 +5,31 @@
 
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <vector>
 
-#include <runtherder/model/config.h>
-#include <runtherder/model/dtype.h>
 #include <runtherder/device/memory.cuh>
+#include <runtherder/model/dtype.h>
 
 namespace runtherder::model {
 
+// TODO:  quantized weights not loaded yet. Move scales and zeros into the
+// slab as Tensors when they are, to match the rest of the graph.
 struct QuantMeta {
     device::DeviceUniquePtr<half> scales;
     device::DeviceUniquePtr<half> zeros;
     std::size_t group_size = 0;
 };
 
+/**
+ * @brief One weight tensor inside a model's arena.
+ * @note data is invalidated when the parent weights graph is destroyed.
+ */
 struct Tensor {
-    device::DeviceUniquePtr<std::byte> data;
-    std::vector<std::size_t>            shape;
-    DType                               dtype = DType::BF16;
-    std::optional<QuantMeta>            quant;
-};
-
-struct LayerWeights {
-    Tensor attn_norm;
-
-    Tensor wq;
-    Tensor wk;
-    Tensor wv;
-    Tensor wo;
-
-    Tensor ffn_norm;
-
-    Tensor w_gate;
-    Tensor w_up;
-    Tensor w_down;
-};
-
-struct Weights {
-    Tensor                    token_embedding;
-    std::vector<LayerWeights> layers;
-    Tensor                    final_norm;
-    Tensor                    lm_head;
+    std::span<std::byte>      data;
+    std::vector<std::size_t>  shape;
+    DType                     dtype = DType::BF16;
+    std::optional<QuantMeta>  quant;
 };
 
 }  // namespace runtherder::model

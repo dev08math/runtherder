@@ -6,6 +6,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -47,9 +48,14 @@ constexpr std::string_view kSingleFileName = "model.safetensors";
 
 }  // namespace
 
-ShardedSafetensors ShardedSafetensors::open(const std::filesystem::path& dir) {
-    ShardedSafetensors model;
+ShardedSafetensors::ShardedSafetensors(std::vector<SafetensorsFile> shards,
+                                       std::vector<std::string>     names,
+                                       NameToShard                  name_to_shard) noexcept
+    : shards_(std::move(shards)),
+      names_(std::move(names)),
+      name_to_shard_(std::move(name_to_shard)) {}
 
+ShardedSafetensors ShardedSafetensors::open(const std::filesystem::path& dir) {
     const std::filesystem::path index_path  = dir / kIndexFileName;
     const std::filesystem::path single_path = dir / kSingleFileName;
 
@@ -66,25 +72,29 @@ ShardedSafetensors ShardedSafetensors::open(const std::filesystem::path& dir) {
         shard_paths.push_back(single_path);
     }
 
-    model.shards_.reserve(shard_paths.size());
+    std::vector<SafetensorsFile> shards;
+    shards.reserve(shard_paths.size());
     for (const std::filesystem::path& path : shard_paths) {
-        model.shards_.push_back(SafetensorsFile::open(path));
+        shards.push_back(SafetensorsFile::open(path));
     }
 
+    std::vector<std::string> names;
+    NameToShard              name_to_shard;
+
     // Names come from each shard's own header, not the index weight_map.
-    for (std::size_t shard_index = 0; shard_index < model.shards_.size(); ++shard_index) {
-        for (const std::string& name : model.shards_[shard_index].tensor_names()) {
-            const auto [inserted_it, inserted] = model.name_to_shard_.emplace(name, shard_index);
+    for (std::size_t shard_index = 0; shard_index < shards.size(); ++shard_index) {
+        for (const std::string& name : shards[shard_index].tensor_names()) {
+            const auto [inserted_it, inserted] = name_to_shard.emplace(name, shard_index);
             RUNTHERDER_CHECK(inserted, "tensor name appears in more than one shard");
-            model.names_.push_back(name);
+            names.push_back(name);
         }
     }
 
-    return model;
+    return ShardedSafetensors(std::move(shards), std::move(names), std::move(name_to_shard));
 }
 
 bool ShardedSafetensors::contains(std::string_view name) const {
-    return name_to_shard_.find(std::string{name}) != name_to_shard_.end();
+    return name_to_shard_.find(name) != name_to_shard_.end();
 }
 
 DType ShardedSafetensors::dtype(std::string_view name) const {
@@ -104,7 +114,7 @@ const std::vector<std::string>& ShardedSafetensors::tensor_names() const noexcep
 }
 
 const SafetensorsFile& ShardedSafetensors::shard_of(std::string_view name) const {
-    const auto it = name_to_shard_.find(std::string{name});
+    const auto it = name_to_shard_.find(name);
     if (it == name_to_shard_.end()) [[unlikely]] {
         const std::string msg = "tensor \"" + std::string{name} + "\" not found in any shard";
         RUNTHERDER_CHECK(false, msg.c_str());

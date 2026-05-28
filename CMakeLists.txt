@@ -47,6 +47,7 @@ set_source_files_properties(main.cpp PROPERTIES LANGUAGE CUDA)
 target_link_libraries(runtherder PRIVATE
     runtherder_headers
     runtherder_kernels
+    runtherder_model
 )
 
 include(FetchContent)
@@ -61,9 +62,13 @@ set(JSON_BuildTests OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(nlohmann_json)
 
 add_library(runtherder_model STATIC
+    src/io/mmap_file.cpp
+    src/io/json_helpers.cpp
     src/model/safetensors.cpp
     src/model/sharded_safetensors.cpp
+    src/model/config.cpp
     src/model/upload.cu
+    src/model/supported/llama.cu
 )
 set_target_properties(runtherder_model PROPERTIES
     POSITION_INDEPENDENT_CODE ON

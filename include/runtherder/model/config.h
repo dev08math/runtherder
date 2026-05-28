@@ -1,23 +1,46 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
 
 namespace runtherder::model {
 
-struct Config {
-    std::size_t hidden_dim;
-    std::size_t num_layers;
-    std::size_t num_heads;
-    std::size_t num_kv_heads;
-    std::size_t head_dim;
-    std::size_t intermediate_dim;
-    std::size_t vocab_size;
-    std::size_t max_seq_len;
+enum class ArchitectureKind {
+    Qwen3,
+};
 
-    float rms_norm_eps;
-    float rope_theta;
+/**
+ * @brief Universal hyperparameters every LLM carries. Family specific
+ *        extensions (heads, MLP, RoPE, MoE experts, SSM state) live in
+ *        their family's own config under supported/.
+ * @note Only constructable via load(). Cross field invariants are checked
+ *       there before the instance is returned.
+ */
+class Config {
+public:
+    /**
+     * @brief Parses the universal portion of config.json under model_dir.
+     * @note Bails via RUNTHERDER_CHECK on missing file, malformed JSON,
+     *       missing required fields, or unknown architecture string.
+     */
+    [[nodiscard]] static Config load(const std::filesystem::path& model_dir);
 
-    bool tie_word_embeddings;
+    [[nodiscard]] ArchitectureKind architecture()        const noexcept { return architecture_; }
+    [[nodiscard]] std::size_t      hidden_dim()          const noexcept { return hidden_dim_; }
+    [[nodiscard]] std::size_t      num_layers()          const noexcept { return num_layers_; }
+    [[nodiscard]] std::size_t      vocab_size()          const noexcept { return vocab_size_; }
+    [[nodiscard]] std::size_t      max_seq_len()         const noexcept { return max_seq_len_; }
+    [[nodiscard]] bool             tie_word_embeddings() const noexcept { return tie_word_embeddings_; }
+
+private:
+    Config() = default;
+
+    ArchitectureKind architecture_        = ArchitectureKind::Qwen3;
+    std::size_t      hidden_dim_          = 0;
+    std::size_t      num_layers_          = 0;
+    std::size_t      vocab_size_          = 0;
+    std::size_t      max_seq_len_         = 0;
+    bool             tie_word_embeddings_ = false;
 };
 
 }  // namespace runtherder::model
