@@ -9,7 +9,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include <runtherder/runtime/check.h>
+#include <runtherder/check.h>
 
 namespace runtherder::model {
 
@@ -71,8 +71,7 @@ ShardedSafetensors ShardedSafetensors::open(const std::filesystem::path& dir) {
         model.shards_.push_back(SafetensorsFile::open(path));
     }
 
-    // Trust each shard header for its own tensor names rather than the index
-    // weight_map, so the shard file stays the source of truth.
+    // Names come from each shard's own header, not the index weight_map.
     for (std::size_t shard_index = 0; shard_index < model.shards_.size(); ++shard_index) {
         for (const std::string& name : model.shards_[shard_index].tensor_names()) {
             const auto [inserted_it, inserted] = model.name_to_shard_.emplace(name, shard_index);

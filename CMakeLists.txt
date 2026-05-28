@@ -63,6 +63,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 add_library(runtherder_model STATIC
     src/model/safetensors.cpp
     src/model/sharded_safetensors.cpp
+    src/model/upload.cu
 )
 set_target_properties(runtherder_model PROPERTIES
     POSITION_INDEPENDENT_CODE ON

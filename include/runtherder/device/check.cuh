@@ -4,9 +4,9 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include <runtherder/runtime/check.h>
+#include <runtherder/check.h>
 
-namespace runtherder::runtime {
+namespace runtherder::device {
 
 inline void check_cuda(cudaError_t err, const char* expr,
                        const char* file, int line) {
@@ -17,10 +17,10 @@ inline void check_cuda(cudaError_t err, const char* expr,
     }
 }
 
-}  // namespace runtherder::runtime
+}  // namespace runtherder::device
 
 #define RUNTHERDER_CUDA_CHECK(expr) \
-    ::runtherder::runtime::check_cuda((expr), #expr, __FILE__, __LINE__)
+    ::runtherder::device::check_cuda((expr), #expr, __FILE__, __LINE__)
 
 #define RUNTHERDER_CUDA_CHECK_LAST() \
     RUNTHERDER_CUDA_CHECK(cudaGetLastError())

@@ -9,18 +9,18 @@
 
 #include <runtherder/model/config.h>
 #include <runtherder/model/dtype.h>
-#include <runtherder/runtime/device_buffer.cuh>
+#include <runtherder/device/memory.cuh>
 
 namespace runtherder::model {
 
 struct QuantMeta {
-    runtime::DeviceUniquePtr<half> scales;
-    runtime::DeviceUniquePtr<half> zeros;
+    device::DeviceUniquePtr<half> scales;
+    device::DeviceUniquePtr<half> zeros;
     std::size_t group_size = 0;
 };
 
 struct Tensor {
-    runtime::DeviceUniquePtr<std::byte> data;
+    device::DeviceUniquePtr<std::byte> data;
     std::vector<std::size_t>            shape;
     DType                               dtype = DType::BF16;
     std::optional<QuantMeta>            quant;

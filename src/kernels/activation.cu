@@ -3,7 +3,7 @@
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
-#include <runtherder/runtime/error.cuh>
+#include <runtherder/device/check.cuh>
 
 namespace runtherder::kernels {
 

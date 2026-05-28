@@ -14,7 +14,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include <runtherder/runtime/check.h>
+#include <runtherder/check.h>
 
 namespace runtherder::model {
 

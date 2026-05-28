@@ -9,12 +9,12 @@
 #include <vector>
 
 #include <runtherder/kernels/rmsnorm.cuh>
-#include <runtherder/runtime/device_buffer.cuh>
-#include <runtherder/runtime/error.cuh>
+#include "device_buffer.cuh"
+#include <runtherder/device/check.cuh>
 
 namespace {
 
-using runtherder::runtime::DeviceBuffer;
+using runtherder::device::DeviceBuffer;
 
 std::vector<__nv_bfloat16> make_bf16_random(std::size_t count,
                                             float        scale,

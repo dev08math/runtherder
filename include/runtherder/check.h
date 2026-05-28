@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-namespace runtherder::runtime {
+namespace runtherder {
 
 [[noreturn]] inline void fail_check(const char* expr, const char* msg,
                                     const char* file, int line) {
@@ -13,11 +13,11 @@ namespace runtherder::runtime {
     std::exit(EXIT_FAILURE);
 }
 
-}  // namespace runtherder::runtime
+}  // namespace runtherder
 
 #define RUNTHERDER_CHECK(cond, msg)                                            \
     do {                                                                       \
         if (!(cond)) [[unlikely]] {                                            \
-            ::runtherder::runtime::fail_check(#cond, (msg), __FILE__, __LINE__);\
+            ::runtherder::fail_check(#cond, (msg), __FILE__, __LINE__);        \
         }                                                                      \
     } while (0)
