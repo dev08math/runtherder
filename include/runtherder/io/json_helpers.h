@@ -18,6 +18,8 @@ namespace runtherder::io {
 
 /**
  * @brief Extracts a required field from a JSON object, typed as T.
+ * @pre The value at key is convertible to T. A type mismatch throws an
+ *      nlohmann exception instead of bailing via RUNTHERDER_CHECK.
  * @note Bails via RUNTHERDER_CHECK if the key is missing.
  */
 template <typename T>

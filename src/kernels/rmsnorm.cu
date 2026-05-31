@@ -9,7 +9,7 @@ namespace runtherder::kernels {
 
 namespace {
 
-    // TODO: Need to benchmark different block sizes and vector widths for various hidden_dim sizes.
+// TODO: benchmark block sizes and vector widths for various hidden_dim sizes.
 constexpr int kBlockSize = 256;
 constexpr int kVecWidth  = 8;
 constexpr int kMaxWarps  = 32;
@@ -22,6 +22,7 @@ __device__ __forceinline__ float warp_reduce_sum(float v) {
     return v;
 }
 
+// Full sum lands on thread 0 only. Other threads return partial values.
 __device__ __forceinline__ float block_reduce_sum(float v, float* s_partial) {
     const int lane      = threadIdx.x & 31;
     const int warp      = threadIdx.x >> 5;
@@ -63,6 +64,7 @@ __global__ void rmsnorm_bf16_kernel(
         h_row = h_out + row * hidden_dim;
     }
 
+    // Per thread register cache of h = x (+ residual), reused in pass 2.
     float h_cache[VecsPerThread * kVecWidth];
     float local_ss = 0.0f;
 

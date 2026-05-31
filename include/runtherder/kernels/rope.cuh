@@ -5,21 +5,17 @@
 
 namespace runtherder::kernels {
 
-// RoPE, BF16 storage, FP32 trig, half-split (HF/Llama/Qwen), in-place on q and k.
-//
-// Layouts:
-//   q : [seq_len, num_q_heads,  head_dim]
-//   k : [seq_len, num_kv_heads, head_dim]
-// Token t rotates by pos = start_pos + t.
-//
-// Preconditions (caller, not validated in-kernel):
-//   - Device pointers, 16-byte aligned. q and k distinct.
-//   - seq_len >= 1, start_pos >= 0.
-//   - num_q_heads, num_kv_heads >= 1.
-//   - 2 <= head_dim <= 256, head_dim % 2 == 0.
-//   - theta_base > 0.
-//
-// Async on `stream`.
+/**
+ * @brief In place RoPE on q and k, half split convention (HF/Llama/Qwen).
+ *        Layouts: q [seq_len, num_q_heads, head_dim],
+ *        k [seq_len, num_kv_heads, head_dim]. Token t rotates by
+ *        pos = start_pos + t.
+ * @pre Device pointers 16 byte aligned, q and k distinct. seq_len >= 1,
+ *      start_pos >= 0, num_q_heads >= 1, num_kv_heads >= 1,
+ *      2 <= head_dim <= 256, head_dim % 2 == 0, theta_base > 0.
+ * @note Async on stream. Matches a double precision reference within
+ *       max abs 5e-2, cosine 0.9999.
+ */
 void rope_bf16_inplace(
     __nv_bfloat16* q,
     __nv_bfloat16* k,

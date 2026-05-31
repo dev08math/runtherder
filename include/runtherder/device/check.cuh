@@ -22,5 +22,7 @@ inline void check_cuda(cudaError_t err, const char* expr,
 #define RUNTHERDER_CUDA_CHECK(expr) \
     ::runtherder::device::check_cuda((expr), #expr, __FILE__, __LINE__)
 
+// Surfaces an error from the most recent kernel launch, which reports
+// asynchronously and returns no status of its own.
 #define RUNTHERDER_CUDA_CHECK_LAST() \
     RUNTHERDER_CUDA_CHECK(cudaGetLastError())

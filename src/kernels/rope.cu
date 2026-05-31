@@ -24,7 +24,7 @@ __global__ void rope_qk_bf16_kernel(
     const int i     = threadIdx.x;
     const int half  = head_dim >> 1;
 
-    // blockDim.x == half, so this is a no-op guard against misconfigured launches.
+    // blockDim.x == half. Guards a misconfigured launch.
     if (i >= half) {
         return;
     }
@@ -39,7 +39,7 @@ __global__ void rope_qk_bf16_kernel(
     float s, c;
     __sincosf(theta, &s, &c);
 
-    // grid y-dim packs Q heads first, then K heads: [0, num_q_heads) -> q,
+    // grid y dim packs Q heads first, then K heads: [0, num_q_heads) -> q,
     // [num_q_heads, num_q_heads + num_kv_heads) -> k (rebased to kv_head).
     __nv_bfloat16* row;
     if (head < num_q_heads) {

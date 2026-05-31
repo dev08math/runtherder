@@ -15,6 +15,9 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 # Ada Lovelace = sm_89.
 set(CMAKE_CUDA_ARCHITECTURES 89)
 
+# cublasLt for the GEMM launcher.
+find_package(CUDAToolkit REQUIRED)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -31,12 +34,13 @@ add_library(runtherder_kernels STATIC
     src/kernels/rmsnorm.cu
     src/kernels/rope.cu
     src/kernels/activation.cu
+    src/kernels/matmul.cu
 )
 set_target_properties(runtherder_kernels PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     POSITION_INDEPENDENT_CODE ON
 )
-target_link_libraries(runtherder_kernels PUBLIC runtherder_headers)
+target_link_libraries(runtherder_kernels PUBLIC runtherder_headers CUDA::cublasLt CUDA::cublas)
 
 add_executable(runtherder main.cpp)
 set_target_properties(runtherder PROPERTIES
@@ -68,7 +72,8 @@ add_library(runtherder_model STATIC
     src/model/sharded_safetensors.cpp
     src/model/config.cpp
     src/model/upload.cu
-    src/model/supported/llama.cu
+    src/model/supported/llama/llama.cu
+    src/model/supported/llama/qwen3.cu
 )
 set_target_properties(runtherder_model PROPERTIES
     POSITION_INDEPENDENT_CODE ON

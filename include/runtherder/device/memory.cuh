@@ -20,6 +20,10 @@ struct CudaFreeDeleter {
 template <typename T>
 using DeviceUniquePtr = std::unique_ptr<T[], CudaFreeDeleter>;
 
+/**
+ * @brief Owning device allocation of count elements of T, freed via cudaFree.
+ * @note count == 0 yields an empty pointer with no allocation.
+ */
 template <typename T>
 [[nodiscard]] inline DeviceUniquePtr<T> make_device_unique(std::size_t count) {
     if (count == 0) {

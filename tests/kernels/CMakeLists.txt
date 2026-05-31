@@ -33,3 +33,15 @@ target_link_libraries(test_activation PRIVATE
     GTest::gtest_main
 )
 gtest_discover_tests(test_activation)
+
+add_executable(test_matmul test_matmul.cpp)
+set_target_properties(test_matmul PROPERTIES
+    LANGUAGE CUDA
+)
+set_source_files_properties(test_matmul.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(test_matmul PRIVATE
+    runtherder_headers
+    runtherder_kernels
+    GTest::gtest_main
+)
+gtest_discover_tests(test_matmul)

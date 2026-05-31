@@ -36,7 +36,7 @@ constexpr std::size_t kHeaderLenBytes = 8;
         "unsupported safetensors dtype \"" + std::string{s} +
         "\" for tensor \"" + std::string{tensor_name} + "\"";
     RUNTHERDER_CHECK(false, msg.c_str());
-    return DType::BF16;  // fallback
+    return DType::BF16;  // unreachable, RUNTHERDER_CHECK exits
 }
 
 }  // namespace

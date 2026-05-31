@@ -19,8 +19,8 @@ namespace {
 constexpr std::string_view kIndexFileName  = "model.safetensors.index.json";
 constexpr std::string_view kSingleFileName = "model.safetensors";
 
-// Reads the shard filenames named by the index weight_map, deduplicated and
-// ordered. Order comes from the set so shard indices are stable across runs.
+// Reads the shard filenames named by the index weight_map, deduplicated.
+// The std::set gives a stable order across runs.
 [[nodiscard]] std::set<std::string> read_shard_names(const std::filesystem::path& index_path) {
     std::ifstream in(index_path, std::ios::binary);
     RUNTHERDER_CHECK(in.is_open(), "failed to open safetensors index file");

@@ -31,6 +31,8 @@ public:
     [[nodiscard]] static MmapFile open(const std::filesystem::path& path);
 
     [[nodiscard]] std::span<const std::byte> bytes() const noexcept;
+    // MmapDeleter already carries the length munmap needs. Read it back from
+    // the deleter rather than duplicating a size_ member.
     [[nodiscard]] std::size_t                size()  const noexcept { return ptr_.get_deleter().size; }
 
 private:

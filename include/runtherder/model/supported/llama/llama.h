@@ -24,9 +24,8 @@ public:
     /**
      * @brief Parses config.json under model_dir into a validated LlamaConfig.
      * @note Bails via RUNTHERDER_CHECK on missing file, malformed JSON,
-     *       missing required fields, or violated cross field invariants
-     *       (num_heads * head_dim == hidden_dim, num_kv_heads divides
-     *       num_heads).
+     *       missing required fields, a non positive field, or num_kv_heads
+     *       not dividing num_heads.
      */
     [[nodiscard]] static LlamaConfig load(const std::filesystem::path& model_dir);
 
@@ -94,6 +93,17 @@ public:
     [[nodiscard]] static LlamaWeights load(const ShardedSafetensors& reader,
                                            const LlamaConfig& config);
 
+    /**
+     * @brief Assembles the graph from parts a per architecture arranger drained
+     *        out of an uploaded tensor map. arena owns the bytes every part
+     *        spans into.
+     */
+    LlamaWeights(device::DeviceUniquePtr<std::byte> arena,
+                 Tensor                             token_embedding,
+                 std::vector<LlamaLayerWeights>     layers,
+                 Tensor                             final_norm,
+                 Tensor                             lm_head) noexcept;
+
     LlamaWeights(LlamaWeights&&) noexcept            = default;
     LlamaWeights& operator=(LlamaWeights&&) noexcept = default;
     LlamaWeights(const LlamaWeights&)                = delete;
@@ -106,9 +116,6 @@ public:
 
 private:
     LlamaWeights() = default;
-
-    [[nodiscard]] static LlamaWeights load_qwen3(const ShardedSafetensors& reader,
-                                                 const LlamaConfig& config);
 
     device::DeviceUniquePtr<std::byte>     arena_;
     Tensor                                 token_embedding_;

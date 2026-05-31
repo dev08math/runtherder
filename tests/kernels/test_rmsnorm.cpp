@@ -36,8 +36,6 @@ std::vector<float> to_fp32(const std::vector<__nv_bfloat16>& src) {
     return out;
 }
 
-// CPU FP32 reference for plain RMSNorm. Reads BF16, computes in FP32,
-// stores BF16 (matching the kernel's storage path).
 std::vector<__nv_bfloat16> rmsnorm_cpu_reference(
     const std::vector<__nv_bfloat16>& x,
     const std::vector<__nv_bfloat16>& g,
@@ -128,7 +126,7 @@ CompareResult compare_bf16(const std::vector<__nv_bfloat16>& a,
     return {max_abs, cos};
 }
 
-constexpr float kAbsTol   = 5e-2f;     // BF16 has ~7-bit mantissa
+constexpr float kAbsTol   = 5e-2f;     // BF16 has a 7 bit mantissa
 constexpr float kCosFloor = 0.9999f;
 
 void run_plain_case(int num_tokens, int hidden_dim) {

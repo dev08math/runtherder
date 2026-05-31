@@ -13,8 +13,8 @@ enum class ArchitectureKind {
  * @brief Universal hyperparameters every LLM carries. Family specific
  *        extensions (heads, MLP, RoPE, MoE experts, SSM state) live in
  *        their family's own config under supported/.
- * @note Only constructable via load(). Cross field invariants are checked
- *       there before the instance is returned.
+ * @note Only constructable via load(), which validates the parsed fields
+ *       before the instance is returned.
  */
 class Config {
 public:

@@ -1,7 +1,6 @@
-#include <runtherder/model/supported/llama.h>
+#include <runtherder/model/supported/llama/llama.h>
 
 #include <cstddef>
-#include <string>
 #include <string_view>
 #include <utility>
 
@@ -9,6 +8,7 @@
 
 #include <runtherder/check.h>
 #include <runtherder/io/json_helpers.h>
+#include <runtherder/model/supported/llama/qwen3.h>
 #include <runtherder/model/upload.cuh>
 
 namespace runtherder::model {
@@ -16,21 +16,6 @@ namespace runtherder::model {
 namespace {
 
 constexpr std::string_view kConfigFileName = "config.json";
-
-[[nodiscard]] Tensor take(ByName& m, const std::string& name) {
-    auto it = m.find(name);
-    if (it == m.end()) [[unlikely]] {
-        const std::string msg = "expected tensor \"" + name + "\" missing from model";
-        RUNTHERDER_CHECK(false, msg.c_str());
-    }
-    Tensor out = std::move(it->second);
-    m.erase(it);
-    return out;
-}
-
-[[nodiscard]] std::string layer_name(std::size_t i, std::string_view suffix) {
-    return "model.layers." + std::to_string(i) + "." + std::string{suffix};
-}
 
 }  // namespace
 
@@ -74,59 +59,24 @@ LlamaConfig LlamaConfig::load(const std::filesystem::path& model_dir) {
                        intermediate_dim, rms_norm_eps, rope_theta);
 }
 
+LlamaWeights::LlamaWeights(device::DeviceUniquePtr<std::byte> arena,
+                           Tensor                             token_embedding,
+                           std::vector<LlamaLayerWeights>     layers,
+                           Tensor                             final_norm,
+                           Tensor                             lm_head) noexcept
+    : arena_(std::move(arena)),
+      token_embedding_(std::move(token_embedding)),
+      layers_(std::move(layers)),
+      final_norm_(std::move(final_norm)),
+      lm_head_(std::move(lm_head)) {}
+
 LlamaWeights LlamaWeights::load(const ShardedSafetensors& reader, const LlamaConfig& config) {
     switch (config.base().architecture()) {
         case ArchitectureKind::Qwen3:
-            return load_qwen3(reader, config);
+            return qwen3::arrange(upload_all(reader), config);
     }
     RUNTHERDER_CHECK(false, "architecture not in Llama family");
     return LlamaWeights{};
-}
-
-LlamaWeights LlamaWeights::load_qwen3(const ShardedSafetensors& reader, const LlamaConfig& config) {
-    Uploaded uploaded = upload_all(reader);
-    ByName& m = uploaded.by_name;
-
-    LlamaWeights out;
-    out.arena_           = std::move(uploaded.arena);
-    out.token_embedding_ = take(m, "model.embed_tokens.weight");
-    out.final_norm_      = take(m, "model.norm.weight");
-
-    if (config.base().tie_word_embeddings()) {
-        // Share the span and metadata. Tensor is move only because of QuantMeta,
-        // so build a fresh one with the same view rather than copy assigning.
-        out.lm_head_ = Tensor{
-            out.token_embedding_.data,
-            out.token_embedding_.shape,
-            out.token_embedding_.dtype,
-            std::nullopt,
-        };
-    } else {
-        out.lm_head_ = take(m, "lm_head.weight");
-    }
-
-    const std::size_t num_layers = config.base().num_layers();
-    out.layers_.reserve(num_layers);
-
-    for (std::size_t i = 0; i < num_layers; ++i) {
-        LlamaLayerWeights layer;
-        layer.attn_norm = take(m, layer_name(i, "input_layernorm.weight"));
-        layer.wq        = take(m, layer_name(i, "self_attn.q_proj.weight"));
-        layer.wk        = take(m, layer_name(i, "self_attn.k_proj.weight"));
-        layer.wv        = take(m, layer_name(i, "self_attn.v_proj.weight"));
-        layer.wo        = take(m, layer_name(i, "self_attn.o_proj.weight"));
-        layer.q_norm    = take(m, layer_name(i, "self_attn.q_norm.weight"));
-        layer.k_norm    = take(m, layer_name(i, "self_attn.k_norm.weight"));
-        layer.ffn_norm  = take(m, layer_name(i, "post_attention_layernorm.weight"));
-        layer.w_gate    = take(m, layer_name(i, "mlp.gate_proj.weight"));
-        layer.w_up      = take(m, layer_name(i, "mlp.up_proj.weight"));
-        layer.w_down    = take(m, layer_name(i, "mlp.down_proj.weight"));
-        out.layers_.push_back(std::move(layer));
-    }
-
-    RUNTHERDER_CHECK(m.empty(), "model directory contains tensors not consumed by the loader");
-
-    return out;
 }
 
 }  // namespace runtherder::model

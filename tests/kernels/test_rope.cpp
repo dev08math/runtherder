@@ -36,10 +36,8 @@ std::vector<float> to_fp32(const std::vector<__nv_bfloat16>& src) {
     return out;
 }
 
-// CPU reference: BF16 storage, FP64 trig and rotation arithmetic. Mirrors
-// the kernel's half-split layout but with tighter numerics than the device
-// path (which uses __powf / __sincosf in FP32). The kernel must still match
-// within the BF16-storage tolerance.
+// FP64 reference, tighter than the device FP32 path. The kernel matches
+// within BF16 storage tolerance.
 void rope_cpu_reference(std::vector<__nv_bfloat16>& tensor,
                         int                          start_pos,
                         int                          seq_len,

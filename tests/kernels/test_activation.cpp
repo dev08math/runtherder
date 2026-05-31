@@ -28,9 +28,8 @@ std::vector<__nv_bfloat16> make_bf16_random(std::size_t   count,
     return out;
 }
 
-// CPU reference: BF16 storage, FP64 silu + multiply. Tighter than the
-// device path (FP32 + __expf); kernel must still pass within BF16-storage
-// tolerance.
+// FP64 reference, tighter than the device FP32 path. The kernel matches
+// within BF16 storage tolerance.
 std::vector<__nv_bfloat16> swiglu_cpu_reference(
     const std::vector<__nv_bfloat16>& gate,
     const std::vector<__nv_bfloat16>& up) {

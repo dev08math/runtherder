@@ -3,7 +3,7 @@
 #include <filesystem>
 
 #include <runtherder/model/sharded_safetensors.h>
-#include <runtherder/model/supported/llama.h>
+#include <runtherder/model/supported/llama/llama.h>
 #include <runtherder/model/weights.h>
 
 namespace {
