@@ -3,10 +3,14 @@
 #include <cstddef>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <vector>
+
+#include <cuda_bf16.h>
 
 #include <runtherder/device/memory.cuh>
 #include <runtherder/model/config.h>
+#include <runtherder/model/context.h>
 #include <runtherder/model/sharded_safetensors.h>
 #include <runtherder/model/weights.h>
 
@@ -33,6 +37,8 @@ public:
     [[nodiscard]] std::size_t   num_heads()        const noexcept { return num_heads_; }
     [[nodiscard]] std::size_t   num_kv_heads()     const noexcept { return num_kv_heads_; }
     [[nodiscard]] std::size_t   head_dim()         const noexcept { return head_dim_; }
+    [[nodiscard]] std::size_t   q_dim()            const noexcept { return q_dim_; }
+    [[nodiscard]] std::size_t   kv_dim()           const noexcept { return kv_dim_; }
     [[nodiscard]] std::size_t   intermediate_dim() const noexcept { return intermediate_dim_; }
     [[nodiscard]] float         rms_norm_eps()     const noexcept { return rms_norm_eps_; }
     [[nodiscard]] float         rope_theta()       const noexcept { return rope_theta_; }
@@ -50,6 +56,8 @@ private:
     std::size_t  num_heads_;
     std::size_t  num_kv_heads_;
     std::size_t  head_dim_;
+    std::size_t  q_dim_;
+    std::size_t  kv_dim_;
     std::size_t  intermediate_dim_;
     float        rms_norm_eps_;
     float        rope_theta_;
@@ -123,5 +131,25 @@ private:
     Tensor                                 final_norm_;
     Tensor                                 lm_head_;
 };
+
+// TODO need to remove once forward returns logits. Interim and test only: forward
+// writes its activations into transient ctx.scratch(), so these pointers are
+// the only way to tes q/k/v.
+struct LlamaActivations {
+    const __nv_bfloat16* hidden;
+    const __nv_bfloat16* normed;
+    const __nv_bfloat16* q;
+    const __nv_bfloat16* k;
+    const __nv_bfloat16* v;
+    int                  num_tokens;
+};
+
+// Partial Llama family forward: embed, attention input RMSNorm, and q/k/v
+// projection for layer 0, carved from ctx.scratch(). Async on the default
+// stream. Interim shape until the full pipeline returns logits.
+[[nodiscard]] LlamaActivations llama_forward(const LlamaWeights&  weights,
+                                             const LlamaConfig&   config,
+                                             ModelContext&        ctx,
+                                             std::span<const int> token_ids);
 
 }  // namespace runtherder::model

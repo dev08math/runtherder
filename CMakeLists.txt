@@ -35,9 +35,11 @@ add_library(runtherder_kernels STATIC
     src/kernels/rope.cu
     src/kernels/activation.cu
     src/kernels/matmul.cu
+    src/kernels/embedding.cu
 )
 set_target_properties(runtherder_kernels PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
     POSITION_INDEPENDENT_CODE ON
 )
 target_link_libraries(runtherder_kernels PUBLIC runtherder_headers CUDA::cublasLt CUDA::cublas)
@@ -71,6 +73,7 @@ add_library(runtherder_model STATIC
     src/model/safetensors.cpp
     src/model/sharded_safetensors.cpp
     src/model/config.cpp
+    src/model/context.cu
     src/model/upload.cu
     src/model/supported/llama/llama.cu
     src/model/supported/llama/qwen3.cu
@@ -79,7 +82,7 @@ set_target_properties(runtherder_model PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 target_link_libraries(runtherder_model
-    PUBLIC  runtherder_headers
+    PUBLIC  runtherder_headers runtherder_kernels
     PRIVATE nlohmann_json::nlohmann_json
 )
 

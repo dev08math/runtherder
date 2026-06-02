@@ -1,13 +1,17 @@
 #include <runtherder/model/supported/llama/llama.h>
 
 #include <cstddef>
+#include <span>
 #include <string_view>
 #include <utility>
 
+#include <cuda_bf16.h>
 #include <nlohmann/json.hpp>
 
 #include <runtherder/check.h>
 #include <runtherder/io/json_helpers.h>
+#include <runtherder/kernels/embedding.cuh>
+#include <runtherder/kernels/rmsnorm.cuh>
 #include <runtherder/model/supported/llama/qwen3.h>
 #include <runtherder/model/upload.cuh>
 
@@ -16,6 +20,10 @@ namespace runtherder::model {
 namespace {
 
 constexpr std::string_view kConfigFileName = "config.json";
+
+[[nodiscard]] const __nv_bfloat16* bf16(const Tensor& t) {
+    return reinterpret_cast<const __nv_bfloat16*>(t.data.data());
+}
 
 }  // namespace
 
@@ -30,6 +38,8 @@ LlamaConfig::LlamaConfig(Config       base,
       num_heads_(num_heads),
       num_kv_heads_(num_kv_heads),
       head_dim_(head_dim),
+      q_dim_(num_heads * head_dim),
+      kv_dim_(num_kv_heads * head_dim),
       intermediate_dim_(intermediate_dim),
       rms_norm_eps_(rms_norm_eps),
       rope_theta_(rope_theta) {}
@@ -77,6 +87,48 @@ LlamaWeights LlamaWeights::load(const ShardedSafetensors& reader, const LlamaCon
     }
     RUNTHERDER_CHECK(false, "architecture not in Llama family");
     return LlamaWeights{};
+}
+
+LlamaActivations llama_forward(const LlamaWeights&  weights,
+                               const LlamaConfig&   config,
+                               ModelContext&        ctx,
+                               std::span<const int> token_ids) {
+    const std::size_t n = token_ids.size();
+    RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
+
+    const std::size_t hidden_dim = config.base().hidden_dim();
+    const std::size_t q_dim      = config.q_dim();
+    const std::size_t kv_dim     = config.kv_dim();
+
+    const int n_int      = static_cast<int>(n);
+    const int hidden_int = static_cast<int>(hidden_dim);
+
+    ctx.scratch().reset();
+    const int* ids = ctx.upload_token_ids(token_ids);
+
+    __nv_bfloat16* hidden = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* normed = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* q      = ctx.scratch().alloc<__nv_bfloat16>(n * q_dim);
+    __nv_bfloat16* k      = ctx.scratch().alloc<__nv_bfloat16>(n * kv_dim);
+    __nv_bfloat16* v      = ctx.scratch().alloc<__nv_bfloat16>(n * kv_dim);
+
+    kernels::embedding_lookup_bf16_forward(
+        hidden, bf16(weights.token_embedding()), ids, n_int, hidden_int);
+
+    // First Layer
+    const LlamaLayerWeights& layer = weights.layers().front();
+
+    kernels::rmsnorm_bf16_forward(
+        normed, hidden, bf16(layer.attn_norm), n_int, hidden_int, config.rms_norm_eps());
+
+    ctx.matmul().linear_bf16(q, normed, bf16(layer.wq),
+                             n_int, static_cast<int>(q_dim), hidden_int);
+    ctx.matmul().linear_bf16(k, normed, bf16(layer.wk),
+                             n_int, static_cast<int>(kv_dim), hidden_int);
+    ctx.matmul().linear_bf16(v, normed, bf16(layer.wv),
+                             n_int, static_cast<int>(kv_dim), hidden_int);
+
+    return LlamaActivations{hidden, normed, q, k, v, n_int};
 }
 
 }  // namespace runtherder::model
