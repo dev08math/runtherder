@@ -58,7 +58,7 @@ __global__ void rope_qk_bf16_kernel(
 
 }  // namespace
 
-void rope_bf16_inplace(
+void rope_bf16(
     __nv_bfloat16* q,
     __nv_bfloat16* k,
     int            start_pos,

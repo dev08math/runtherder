@@ -133,7 +133,7 @@ void run_case(int   seq_len,
     q_dev.copy_from_host(q_host.data());
     k_dev.copy_from_host(k_host.data());
 
-    runtherder::kernels::rope_bf16_inplace(
+    runtherder::kernels::rope_bf16(
         q_dev.data(), k_dev.data(),
         start_pos, seq_len,
         num_q_heads, num_kv_heads,

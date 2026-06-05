@@ -16,7 +16,7 @@ namespace runtherder::kernels {
  * @note Async on stream. Matches a double precision reference within
  *       max abs 5e-2, cosine 0.9999.
  */
-void rope_bf16_inplace(
+void rope_bf16(
     __nv_bfloat16* q,
     __nv_bfloat16* k,
     int            start_pos,
