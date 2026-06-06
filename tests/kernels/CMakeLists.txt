@@ -45,3 +45,15 @@ target_link_libraries(test_matmul PRIVATE
     GTest::gtest_main
 )
 gtest_discover_tests(test_matmul)
+
+add_executable(test_attention test_attention.cpp)
+set_target_properties(test_attention PROPERTIES
+    LANGUAGE CUDA
+)
+set_source_files_properties(test_attention.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(test_attention PRIVATE
+    runtherder_headers
+    runtherder_kernels
+    GTest::gtest_main
+)
+gtest_discover_tests(test_attention)
