@@ -133,9 +133,17 @@ void run_case(int   seq_len,
     q_dev.copy_from_host(q_host.data());
     k_dev.copy_from_host(k_host.data());
 
+    // Positions match the reference: contiguous start_pos + t.
+    std::vector<int> pos_host(static_cast<std::size_t>(seq_len));
+    for (int t = 0; t < seq_len; ++t) {
+        pos_host[static_cast<std::size_t>(t)] = start_pos + t;
+    }
+    DeviceBuffer<int> pos_dev(static_cast<std::size_t>(seq_len));
+    pos_dev.copy_from_host(pos_host.data());
+
     runtherder::kernels::rope_bf16(
         q_dev.data(), k_dev.data(),
-        start_pos, seq_len,
+        pos_dev.data(), seq_len,
         num_q_heads, num_kv_heads,
         head_dim, theta_base,
         nullptr);

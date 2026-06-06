@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <cuda_bf16.h>
+#include <cuda_runtime.h>
 
 #include <runtherder/device/memory.cuh>
 #include <runtherder/model/config.h>
@@ -134,22 +135,23 @@ private:
 
 // TODO need to remove once forward returns logits. Interim and test only: forward
 // writes its activations into transient ctx.scratch(), so these pointers are
-// the only way to tes q/k/v.
+// the only way to test q/k/v and attn.
 struct LlamaActivations {
     const __nv_bfloat16* hidden;
     const __nv_bfloat16* normed;
     const __nv_bfloat16* q;
     const __nv_bfloat16* k;
     const __nv_bfloat16* v;
+    const __nv_bfloat16* attn;
     int                  num_tokens;
 };
 
-// Partial Llama family forward: embed, attention input RMSNorm, and q/k/v
-// projection for layer 0, carved from ctx.scratch(). Async on the default
-// stream. Interim shape until the full pipeline returns logits.
+// Llama family forward. Partial: runs layer 0 only and returns interim
+// activations carved from ctx.scratch(), not logits. Async on stream.
 [[nodiscard]] LlamaActivations llama_forward(const LlamaWeights&  weights,
                                              const LlamaConfig&   config,
                                              ModelContext&        ctx,
-                                             std::span<const int> token_ids);
+                                             std::span<const int> token_ids,
+                                             cudaStream_t         stream = nullptr);
 
 }  // namespace runtherder::model

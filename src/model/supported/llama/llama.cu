@@ -85,10 +85,11 @@ LlamaWeights LlamaWeights::load(const ShardedSafetensors& reader, const LlamaCon
 LlamaActivations llama_forward(const LlamaWeights&  weights,
                                const LlamaConfig&   config,
                                ModelContext&        ctx,
-                               std::span<const int> token_ids) {
+                               std::span<const int> token_ids,
+                               cudaStream_t         stream) {
     switch (config.base().architecture()) {
         case ArchitectureKind::Qwen3:
-            return qwen3::forward(weights, config, ctx, token_ids);
+            return qwen3::forward(weights, config, ctx, token_ids, stream);
     }
     RUNTHERDER_CHECK(false, "architecture not in Llama family");
     return LlamaActivations{};

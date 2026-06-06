@@ -1,7 +1,9 @@
 #include <runtherder/model/context.h>
 
 #include <cstddef>
+#include <memory>
 #include <span>
+#include <utility>
 
 #include <cuda_runtime.h>
 
@@ -11,11 +13,15 @@
 
 namespace runtherder::model {
 
-ModelContext::ModelContext(std::size_t scratch_bytes, std::size_t max_batch_tokens)
+ModelContext::ModelContext(std::size_t                                  scratch_bytes,
+                           std::size_t                                  max_batch_tokens,
+                           std::unique_ptr<attention::AttentionBackend> attention)
     : scratch_(scratch_bytes),
       token_ids_(device::make_device_unique<int>(max_batch_tokens)),
-      max_batch_tokens_(max_batch_tokens) {
+      max_batch_tokens_(max_batch_tokens),
+      attention_(std::move(attention)) {
     RUNTHERDER_CHECK(max_batch_tokens_ >= 1, "max_batch_tokens must be >= 1");
+    RUNTHERDER_CHECK(attention_ != nullptr, "attention backend must not be null");
 }
 
 const int* ModelContext::upload_token_ids(std::span<const int> token_ids) {

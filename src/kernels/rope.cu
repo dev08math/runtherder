@@ -14,7 +14,7 @@ constexpr int kMaxHeadDim = 256;
 __global__ void rope_qk_bf16_kernel(
     __nv_bfloat16* __restrict__ q,
     __nv_bfloat16* __restrict__ k,
-    int                         start_pos,
+    const int*     __restrict__ positions,
     int                         num_q_heads,
     int                         num_kv_heads,
     int                         head_dim,
@@ -29,7 +29,7 @@ __global__ void rope_qk_bf16_kernel(
         return;
     }
 
-    const int pos = start_pos + token;
+    const int pos = positions[token];
 
     const float exponent =
         -2.0f * static_cast<float>(i) / static_cast<float>(head_dim);
@@ -61,7 +61,7 @@ __global__ void rope_qk_bf16_kernel(
 void rope_bf16(
     __nv_bfloat16* q,
     __nv_bfloat16* k,
-    int            start_pos,
+    const int*     positions,
     int            seq_len,
     int            num_q_heads,
     int            num_kv_heads,
@@ -69,7 +69,6 @@ void rope_bf16(
     float          theta_base,
     cudaStream_t   stream) {
     RUNTHERDER_CHECK(seq_len      >= 1, "seq_len must be >= 1");
-    RUNTHERDER_CHECK(start_pos    >= 0, "start_pos must be >= 0");
     RUNTHERDER_CHECK(num_q_heads  >= 1, "num_q_heads must be >= 1");
     RUNTHERDER_CHECK(num_kv_heads >= 1, "num_kv_heads must be >= 1");
     RUNTHERDER_CHECK(head_dim     >= 2, "head_dim must be >= 2");
@@ -80,7 +79,7 @@ void rope_bf16(
     const dim3 grid(seq_len, num_q_heads + num_kv_heads);
     const dim3 block(head_dim / 2);
     rope_qk_bf16_kernel<<<grid, block, 0, stream>>>(
-        q, k, start_pos, num_q_heads, num_kv_heads, head_dim, theta_base);
+        q, k, positions, num_q_heads, num_kv_heads, head_dim, theta_base);
     RUNTHERDER_CUDA_CHECK_LAST();
 }
 

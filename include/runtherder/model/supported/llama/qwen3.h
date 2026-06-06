@@ -2,6 +2,8 @@
 
 #include <span>
 
+#include <cuda_runtime.h>
+
 #include <runtherder/model/supported/llama/llama.h>
 #include <runtherder/model/upload.cuh>
 
@@ -25,6 +27,7 @@ namespace runtherder::model::qwen3 {
 [[nodiscard]] LlamaActivations forward(const LlamaWeights&  weights,
                                        const LlamaConfig&   config,
                                        ModelContext&        ctx,
-                                       std::span<const int> token_ids);
+                                       std::span<const int> token_ids,
+                                       cudaStream_t         stream = nullptr);
 
 }  // namespace runtherder::model::qwen3

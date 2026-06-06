@@ -1,6 +1,7 @@
 #include <runtherder/model/supported/llama/qwen3.h>
 
 #include <cstddef>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <string>
@@ -9,8 +10,11 @@
 #include <vector>
 
 #include <cuda_bf16.h>
+#include <cuda_runtime.h>
 
+#include <runtherder/attention/backend.h>
 #include <runtherder/check.h>
+#include <runtherder/device/check.cuh>
 #include <runtherder/kernels/embedding.cuh>
 #include <runtherder/kernels/rmsnorm.cuh>
 #include <runtherder/kernels/rope.cuh>
@@ -94,7 +98,8 @@ LlamaWeights arrange(Uploaded uploaded, const LlamaConfig& config) {
 LlamaActivations forward(const LlamaWeights&  weights,
                          const LlamaConfig&   config,
                          ModelContext&        ctx,
-                         std::span<const int> token_ids) {
+                         std::span<const int> token_ids,
+                         cudaStream_t         stream) {
     const std::size_t n = token_ids.size();
     RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
 
@@ -138,11 +143,30 @@ LlamaActivations forward(const LlamaWeights&  weights,
     kernels::rmsnorm_bf16_forward(
         k, k, bf16(*layer.k_norm), n_int * num_kv_heads, head_dim, config.rms_norm_eps());
 
-    // start_pos 0: no KV cache yet, prefill positions 0..n-1.
-    kernels::rope_bf16(
-        q, k, 0, n_int, num_q_heads, num_kv_heads, head_dim, config.rope_theta());
+    // Single sequence prefill, so positions are contiguous 0..n-1.
+    int*             positions = ctx.scratch().alloc<int>(n);
+    std::vector<int> positions_host(n);
+    std::iota(positions_host.begin(), positions_host.end(), 0);
+    RUNTHERDER_CUDA_CHECK(cudaMemcpy(positions, positions_host.data(),
+                                     n * sizeof(int), cudaMemcpyHostToDevice));
 
-    return LlamaActivations{hidden, normed, q, k, v, n_int};
+    kernels::rope_bf16(
+        q, k, positions, n_int, num_q_heads, num_kv_heads, head_dim,
+        config.rope_theta());
+
+    __nv_bfloat16* attn = ctx.scratch().alloc<__nv_bfloat16>(n * q_dim);
+    ctx.attention().run(attn, q, k, v, n_int, stream);
+
+    __nv_bfloat16* attn_proj = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+    ctx.matmul().linear_bf16(attn_proj, attn, bf16(layer.wo),
+                             n_int, hidden_int, static_cast<int>(q_dim));
+
+    __nv_bfloat16* ffn_normed = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+    kernels::rmsnorm_add_bf16_forward(
+        ffn_normed, hidden, attn_proj, hidden, bf16(layer.ffn_norm),
+        n_int, hidden_int, config.rms_norm_eps());
+
+    return LlamaActivations{hidden, normed, q, k, v, attn, n_int};
 }
 
 }  // namespace runtherder::model::qwen3

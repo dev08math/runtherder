@@ -6,12 +6,11 @@
 namespace runtherder::kernels {
 
 /**
- * @brief In place RoPE on q and k, half split convention (HF/Llama/Qwen).
+ * @brief In place RoPE on q and k. Token t rotates by positions[t].
  *        Layouts: q [seq_len, num_q_heads, head_dim],
- *        k [seq_len, num_kv_heads, head_dim]. Token t rotates by
- *        pos = start_pos + t.
- * @pre Device pointers 16 byte aligned, q and k distinct. seq_len >= 1,
- *      start_pos >= 0, num_q_heads >= 1, num_kv_heads >= 1,
+ *        k [seq_len, num_kv_heads, head_dim].
+ * @pre q and k 16 byte aligned and distinct. positions device, length seq_len,
+ *      each value >= 0. seq_len >= 1, num_q_heads >= 1, num_kv_heads >= 1,
  *      2 <= head_dim <= 256, head_dim % 2 == 0, theta_base > 0.
  * @note Async on stream. Matches a double precision reference within
  *       max abs 5e-2, cosine 0.9999.
@@ -19,7 +18,7 @@ namespace runtherder::kernels {
 void rope_bf16(
     __nv_bfloat16* q,
     __nv_bfloat16* k,
-    int            start_pos,
+    const int*     positions,
     int            seq_len,
     int            num_q_heads,
     int            num_kv_heads,
