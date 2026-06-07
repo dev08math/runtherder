@@ -15,6 +15,7 @@
 #include <runtherder/attention/backend.h>
 #include <runtherder/check.h>
 #include <runtherder/device/check.cuh>
+#include <runtherder/kernels/activation.cuh>
 #include <runtherder/kernels/embedding.cuh>
 #include <runtherder/kernels/rmsnorm.cuh>
 #include <runtherder/kernels/rope.cuh>
@@ -166,7 +167,25 @@ LlamaActivations forward(const LlamaWeights&  weights,
         ffn_normed, hidden, attn_proj, hidden, bf16(layer.ffn_norm),
         n_int, hidden_int, config.rms_norm_eps());
 
-    return LlamaActivations{hidden, normed, q, k, v, attn, n_int};
+    const std::size_t intermediate_dim = config.intermediate_dim();
+    const int         inter_int        = static_cast<int>(intermediate_dim);
+
+    __nv_bfloat16* gate = ctx.scratch().alloc<__nv_bfloat16>(n * intermediate_dim);
+    __nv_bfloat16* up   = ctx.scratch().alloc<__nv_bfloat16>(n * intermediate_dim);
+
+    ctx.matmul().linear_bf16(gate, ffn_normed, bf16(layer.w_gate),
+                             n_int, inter_int, hidden_int);
+    ctx.matmul().linear_bf16(up, ffn_normed, bf16(layer.w_up),
+                             n_int, inter_int, hidden_int);
+
+    // swiglu writes silu(gate) * up back into gate.
+    kernels::swiglu_bf16_forward(gate, gate, up, n_int * inter_int);
+
+    __nv_bfloat16* mlp_out = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+    ctx.matmul().linear_bf16(mlp_out, gate, bf16(layer.w_down),
+                             n_int, hidden_int, inter_int);
+
+    return LlamaActivations{hidden, normed, q, k, v, attn, mlp_out, n_int};
 }
 
 }  // namespace runtherder::model::qwen3

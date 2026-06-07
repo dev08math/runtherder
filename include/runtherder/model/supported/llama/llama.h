@@ -143,6 +143,7 @@ struct LlamaActivations {
     const __nv_bfloat16* k;
     const __nv_bfloat16* v;
     const __nv_bfloat16* attn;
+    const __nv_bfloat16* mlp_out;
     int                  num_tokens;
 };
 
