@@ -56,6 +56,16 @@ set_target_properties(runtherder_attention PROPERTIES
 )
 target_link_libraries(runtherder_attention PUBLIC runtherder_headers runtherder_kernels)
 
+add_library(runtherder_sampling STATIC
+    src/sampling/greedy.cu
+)
+set_target_properties(runtherder_sampling PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    POSITION_INDEPENDENT_CODE ON
+)
+target_link_libraries(runtherder_sampling PUBLIC runtherder_headers)
+
 add_executable(runtherder main.cpp)
 set_target_properties(runtherder PROPERTIES
     LANGUAGE CUDA
@@ -66,6 +76,7 @@ target_link_libraries(runtherder PRIVATE
     runtherder_headers
     runtherder_kernels
     runtherder_model
+    runtherder_sampling
 )
 
 include(FetchContent)

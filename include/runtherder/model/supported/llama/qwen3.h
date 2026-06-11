@@ -22,12 +22,12 @@ namespace runtherder::model::qwen3 {
 /**
  * @brief Qwen 3 forward skeleton: shared kernel steps plus q_norm/k_norm.
  * @pre weights arranged by arrange() against config. token_ids non empty.
- * @note Async. Partial (layer 0).
+ * @note Async. Returns last token logits.
  */
-[[nodiscard]] LlamaActivations forward(const LlamaWeights&  weights,
-                                       const LlamaConfig&   config,
-                                       ModelContext&        ctx,
-                                       std::span<const int> token_ids,
-                                       cudaStream_t         stream = nullptr);
+[[nodiscard]] LlamaLogits forward(const LlamaWeights&  weights,
+                                  const LlamaConfig&   config,
+                                  ModelContext&        ctx,
+                                  std::span<const int> token_ids,
+                                  cudaStream_t         stream = nullptr);
 
 }  // namespace runtherder::model::qwen3

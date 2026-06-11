@@ -133,26 +133,17 @@ private:
     Tensor                                 lm_head_;
 };
 
-// TODO need to remove once forward returns logits. Interim and test only: forward
-// writes its activations into transient ctx.scratch(), so these pointers are
-// the only way to test q/k/v and attn.
-struct LlamaActivations {
-    const __nv_bfloat16* hidden;
-    const __nv_bfloat16* normed;
-    const __nv_bfloat16* q;
-    const __nv_bfloat16* k;
-    const __nv_bfloat16* v;
-    const __nv_bfloat16* attn;
-    const __nv_bfloat16* mlp_out;
-    int                  num_tokens;
+struct LlamaLogits {
+    const __nv_bfloat16* logits;
+    int                  vocab_size;
 };
 
-// Llama family forward. Partial: runs layer 0 only and returns interim
-// activations carved from ctx.scratch(), not logits. Async on stream.
-[[nodiscard]] LlamaActivations llama_forward(const LlamaWeights&  weights,
-                                             const LlamaConfig&   config,
-                                             ModelContext&        ctx,
-                                             std::span<const int> token_ids,
-                                             cudaStream_t         stream = nullptr);
+// Llama family forward: full layer stack, final norm, lm_head on the last token.
+// Async on stream.
+[[nodiscard]] LlamaLogits llama_forward(const LlamaWeights&  weights,
+                                        const LlamaConfig&   config,
+                                        ModelContext&        ctx,
+                                        std::span<const int> token_ids,
+                                        cudaStream_t         stream = nullptr);
 
 }  // namespace runtherder::model

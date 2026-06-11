@@ -96,11 +96,11 @@ LlamaWeights arrange(Uploaded uploaded, const LlamaConfig& config) {
     };
 }
 
-LlamaActivations forward(const LlamaWeights&  weights,
-                         const LlamaConfig&   config,
-                         ModelContext&        ctx,
-                         std::span<const int> token_ids,
-                         cudaStream_t         stream) {
+LlamaLogits forward(const LlamaWeights&  weights,
+                    const LlamaConfig&   config,
+                    ModelContext&        ctx,
+                    std::span<const int> token_ids,
+                    cudaStream_t         stream) {
     const std::size_t n = token_ids.size();
     RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
 
@@ -114,35 +114,27 @@ LlamaActivations forward(const LlamaWeights&  weights,
     ctx.scratch().reset();
     const int* ids = ctx.upload_token_ids(token_ids);
 
-    __nv_bfloat16* hidden = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
-    __nv_bfloat16* normed = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
-    __nv_bfloat16* q      = ctx.scratch().alloc<__nv_bfloat16>(n * q_dim);
-    __nv_bfloat16* k      = ctx.scratch().alloc<__nv_bfloat16>(n * kv_dim);
-    __nv_bfloat16* v      = ctx.scratch().alloc<__nv_bfloat16>(n * kv_dim);
-
-    kernels::embedding_lookup_bf16_forward(
-        hidden, bf16(weights.token_embedding()), ids, n_int, hidden_int);
-
-    const LlamaLayerWeights& layer = weights.layers().front();
-
-    kernels::rmsnorm_bf16_forward(
-        normed, hidden, bf16(layer.attn_norm), n_int, hidden_int, config.rms_norm_eps());
-
-    ctx.matmul().linear_bf16(q, normed, bf16(layer.wq),
-                             n_int, static_cast<int>(q_dim), hidden_int);
-    ctx.matmul().linear_bf16(k, normed, bf16(layer.wk),
-                             n_int, static_cast<int>(kv_dim), hidden_int);
-    ctx.matmul().linear_bf16(v, normed, bf16(layer.wv),
-                             n_int, static_cast<int>(kv_dim), hidden_int);
-
     const int num_q_heads  = static_cast<int>(config.num_heads());
     const int num_kv_heads = static_cast<int>(config.num_kv_heads());
     const int head_dim     = static_cast<int>(config.head_dim());
 
-    kernels::rmsnorm_bf16_forward(
-        q, q, bf16(*layer.q_norm), n_int * num_q_heads, head_dim, config.rms_norm_eps());
-    kernels::rmsnorm_bf16_forward(
-        k, k, bf16(*layer.k_norm), n_int * num_kv_heads, head_dim, config.rms_norm_eps());
+    const std::size_t intermediate_dim = config.intermediate_dim();
+    const int         inter_int        = static_cast<int>(intermediate_dim);
+
+    __nv_bfloat16* hidden     = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* normed     = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* q          = ctx.scratch().alloc<__nv_bfloat16>(n * q_dim);
+    __nv_bfloat16* k          = ctx.scratch().alloc<__nv_bfloat16>(n * kv_dim);
+    __nv_bfloat16* v          = ctx.scratch().alloc<__nv_bfloat16>(n * kv_dim);
+    __nv_bfloat16* attn       = ctx.scratch().alloc<__nv_bfloat16>(n * q_dim);
+    __nv_bfloat16* attn_proj  = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* ffn_normed = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* gate       = ctx.scratch().alloc<__nv_bfloat16>(n * intermediate_dim);
+    __nv_bfloat16* up         = ctx.scratch().alloc<__nv_bfloat16>(n * intermediate_dim);
+    __nv_bfloat16* mlp_out    = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+
+    kernels::embedding_lookup_bf16_forward(
+        hidden, bf16(weights.token_embedding()), ids, n_int, hidden_int);
 
     // Single sequence prefill, so positions are contiguous 0..n-1.
     int*             positions = ctx.scratch().alloc<int>(n);
@@ -151,41 +143,70 @@ LlamaActivations forward(const LlamaWeights&  weights,
     RUNTHERDER_CUDA_CHECK(cudaMemcpy(positions, positions_host.data(),
                                      n * sizeof(int), cudaMemcpyHostToDevice));
 
-    kernels::rope_bf16(
-        q, k, positions, n_int, num_q_heads, num_kv_heads, head_dim,
-        config.rope_theta());
+    const std::vector<LlamaLayerWeights>& layers = weights.layers();
+    for (std::size_t i = 0; i < layers.size(); ++i) {
+        const LlamaLayerWeights& layer = layers[i];
 
-    __nv_bfloat16* attn = ctx.scratch().alloc<__nv_bfloat16>(n * q_dim);
-    ctx.attention().run(attn, q, k, v, n_int, stream);
+        if (i == 0) {
+            kernels::rmsnorm_bf16_forward(
+                normed, hidden, bf16(layer.attn_norm), n_int, hidden_int,
+                config.rms_norm_eps());
+        } else {
+            kernels::rmsnorm_add_bf16_forward(
+                normed, hidden, mlp_out, hidden, bf16(layer.attn_norm),
+                n_int, hidden_int, config.rms_norm_eps());
+        }
 
-    __nv_bfloat16* attn_proj = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
-    ctx.matmul().linear_bf16(attn_proj, attn, bf16(layer.wo),
-                             n_int, hidden_int, static_cast<int>(q_dim));
+        ctx.matmul().linear_bf16(q, normed, bf16(layer.wq),
+                                 n_int, static_cast<int>(q_dim), hidden_int);
+        ctx.matmul().linear_bf16(k, normed, bf16(layer.wk),
+                                 n_int, static_cast<int>(kv_dim), hidden_int);
+        ctx.matmul().linear_bf16(v, normed, bf16(layer.wv),
+                                 n_int, static_cast<int>(kv_dim), hidden_int);
 
-    __nv_bfloat16* ffn_normed = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+        kernels::rmsnorm_bf16_forward(
+            q, q, bf16(*layer.q_norm), n_int * num_q_heads, head_dim,
+            config.rms_norm_eps());
+        kernels::rmsnorm_bf16_forward(
+            k, k, bf16(*layer.k_norm), n_int * num_kv_heads, head_dim,
+            config.rms_norm_eps());
+
+        kernels::rope_bf16(
+            q, k, positions, n_int, num_q_heads, num_kv_heads, head_dim,
+            config.rope_theta());
+
+        ctx.attention().run(attn, q, k, v, n_int, stream);
+
+        ctx.matmul().linear_bf16(attn_proj, attn, bf16(layer.wo),
+                                 n_int, hidden_int, static_cast<int>(q_dim));
+
+        kernels::rmsnorm_add_bf16_forward(
+            ffn_normed, hidden, attn_proj, hidden, bf16(layer.ffn_norm),
+            n_int, hidden_int, config.rms_norm_eps());
+
+        ctx.matmul().linear_bf16(gate, ffn_normed, bf16(layer.w_gate),
+                                 n_int, inter_int, hidden_int);
+        ctx.matmul().linear_bf16(up, ffn_normed, bf16(layer.w_up),
+                                 n_int, inter_int, hidden_int);
+
+        kernels::swiglu_bf16_forward(gate, gate, up, n_int * inter_int);
+
+        ctx.matmul().linear_bf16(mlp_out, gate, bf16(layer.w_down),
+                                 n_int, hidden_int, inter_int);
+    }
+
     kernels::rmsnorm_add_bf16_forward(
-        ffn_normed, hidden, attn_proj, hidden, bf16(layer.ffn_norm),
+        normed, hidden, mlp_out, hidden, bf16(weights.final_norm()),
         n_int, hidden_int, config.rms_norm_eps());
 
-    const std::size_t intermediate_dim = config.intermediate_dim();
-    const int         inter_int        = static_cast<int>(intermediate_dim);
+    const int      vocab_int = static_cast<int>(config.base().vocab_size());
+    __nv_bfloat16* logits    = ctx.scratch().alloc<__nv_bfloat16>(vocab_int);
 
-    __nv_bfloat16* gate = ctx.scratch().alloc<__nv_bfloat16>(n * intermediate_dim);
-    __nv_bfloat16* up   = ctx.scratch().alloc<__nv_bfloat16>(n * intermediate_dim);
+    const __nv_bfloat16* last = normed + static_cast<std::size_t>(n_int - 1) * hidden_dim;
+    ctx.matmul().linear_bf16(logits, last, bf16(weights.lm_head()),
+                             1, vocab_int, hidden_int);
 
-    ctx.matmul().linear_bf16(gate, ffn_normed, bf16(layer.w_gate),
-                             n_int, inter_int, hidden_int);
-    ctx.matmul().linear_bf16(up, ffn_normed, bf16(layer.w_up),
-                             n_int, inter_int, hidden_int);
-
-    // swiglu writes silu(gate) * up back into gate.
-    kernels::swiglu_bf16_forward(gate, gate, up, n_int * inter_int);
-
-    __nv_bfloat16* mlp_out = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
-    ctx.matmul().linear_bf16(mlp_out, gate, bf16(layer.w_down),
-                             n_int, hidden_int, inter_int);
-
-    return LlamaActivations{hidden, normed, q, k, v, attn, mlp_out, n_int};
+    return LlamaLogits{logits, vocab_int};
 }
 
 }  // namespace runtherder::model::qwen3
