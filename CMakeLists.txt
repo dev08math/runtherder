@@ -58,6 +58,7 @@ target_link_libraries(runtherder_attention PUBLIC runtherder_headers runtherder_
 
 add_library(runtherder_sampling STATIC
     src/sampling/greedy.cu
+    src/sampling/sampler.cu
 )
 set_target_properties(runtherder_sampling PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
@@ -76,7 +77,9 @@ target_link_libraries(runtherder PRIVATE
     runtherder_headers
     runtherder_kernels
     runtherder_model
+    runtherder_attention
     runtherder_sampling
+    runtherder_tokenizer
 )
 
 include(FetchContent)
@@ -89,6 +92,23 @@ FetchContent_Declare(
 )
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(nlohmann_json)
+
+FetchContent_Declare(
+    tokenizers_cpp
+    GIT_REPOSITORY https://github.com/mlc-ai/tokenizers-cpp.git
+    GIT_TAG        c586c52f93f7b060753bd2388eb96a105cb7374d
+)
+FetchContent_MakeAvailable(tokenizers_cpp)
+
+add_library(runtherder_tokenizer STATIC
+    src/tokenizer/tokenizer.cpp
+)
+set_target_properties(runtherder_tokenizer PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+target_link_libraries(runtherder_tokenizer
+    PUBLIC runtherder_headers tokenizers_cpp
+)
 
 add_library(runtherder_model STATIC
     src/io/mmap_file.cpp

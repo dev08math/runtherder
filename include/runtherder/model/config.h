@@ -29,6 +29,7 @@ public:
     [[nodiscard]] std::size_t      hidden_dim()          const noexcept { return hidden_dim_; }
     [[nodiscard]] std::size_t      num_layers()          const noexcept { return num_layers_; }
     [[nodiscard]] std::size_t      vocab_size()          const noexcept { return vocab_size_; }
+    [[nodiscard]] int              eos_token_id()        const noexcept { return eos_token_id_; }
     [[nodiscard]] std::size_t      max_seq_len()         const noexcept { return max_seq_len_; }
     [[nodiscard]] bool             tie_word_embeddings() const noexcept { return tie_word_embeddings_; }
 
@@ -39,6 +40,7 @@ private:
     std::size_t      hidden_dim_          = 0;
     std::size_t      num_layers_          = 0;
     std::size_t      vocab_size_          = 0;
+    int              eos_token_id_        = 0;
     std::size_t      max_seq_len_         = 0;
     bool             tie_word_embeddings_ = false;
 };

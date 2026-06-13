@@ -4,7 +4,7 @@
 
 namespace runtherder::sampling {
 
-// logits is a device pointer to vocab bf16 values. vocab >= 1.
+// The temperature == 0 path of the sampler: a deterministic argmax, no draw.
 [[nodiscard]] int greedy_argmax(const __nv_bfloat16* logits, int vocab);
 
 }  // namespace runtherder::sampling

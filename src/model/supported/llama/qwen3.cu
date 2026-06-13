@@ -96,6 +96,23 @@ LlamaWeights arrange(Uploaded uploaded, const LlamaConfig& config) {
     };
 }
 
+std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_tokens) {
+    const std::size_t n                = max_batch_tokens;
+    const std::size_t hidden_dim       = config.base().hidden_dim();
+    const std::size_t q_dim            = config.q_dim();
+    const std::size_t kv_dim           = config.kv_dim();
+    const std::size_t intermediate_dim = config.intermediate_dim();
+    const std::size_t vocab            = config.base().vocab_size();
+
+    constexpr std::size_t kAlign  = 256;
+    constexpr std::size_t kAllocs = 13;
+
+    const std::size_t bf16_elems =
+        n * (5 * hidden_dim + 2 * q_dim + 2 * kv_dim + 2 * intermediate_dim) + vocab;
+
+    return bf16_elems * sizeof(__nv_bfloat16) + n * sizeof(int) + kAllocs * kAlign;
+}
+
 LlamaLogits forward(const LlamaWeights&  weights,
                     const LlamaConfig&   config,
                     ModelContext&        ctx,
@@ -136,7 +153,7 @@ LlamaLogits forward(const LlamaWeights&  weights,
     kernels::embedding_lookup_bf16_forward(
         hidden, bf16(weights.token_embedding()), ids, n_int, hidden_int);
 
-    // Single sequence prefill, so positions are contiguous 0..n-1.
+    // Positions assume single sequence prefill, not prefix caching.
     int*             positions = ctx.scratch().alloc<int>(n);
     std::vector<int> positions_host(n);
     std::iota(positions_host.begin(), positions_host.end(), 0);

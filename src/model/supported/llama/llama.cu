@@ -95,4 +95,13 @@ LlamaLogits llama_forward(const LlamaWeights&  weights,
     return LlamaLogits{};
 }
 
+std::size_t llama_scratch_bytes(const LlamaConfig& config, std::size_t max_batch_tokens) {
+    switch (config.base().architecture()) {
+        case ArchitectureKind::Qwen3:
+            return qwen3::scratch_bytes(config, max_batch_tokens);
+    }
+    RUNTHERDER_CHECK(false, "architecture not in Llama family");
+    return 0;
+}
+
 }  // namespace runtherder::model

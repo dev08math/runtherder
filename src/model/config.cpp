@@ -16,8 +16,7 @@ namespace {
 
 constexpr std::string_view kConfigFileName = "config.json";
 
-// Registry of supported model_type strings. Adding a new architecture is one
-// row plus a new ArchitectureKind enum value.
+// Registry of supported model_type strings.
 [[nodiscard]] const auto& architecture_registry() {
     static const std::unordered_map<std::string, ArchitectureKind,
                                     TransparentStringHash, std::equal_to<>> table{
@@ -46,6 +45,7 @@ Config Config::load(const std::filesystem::path& model_dir) {
     out.hidden_dim_          = io::require_field<std::size_t>(cfg, "hidden_size");
     out.num_layers_          = io::require_field<std::size_t>(cfg, "num_hidden_layers");
     out.vocab_size_          = io::require_field<std::size_t>(cfg, "vocab_size");
+    out.eos_token_id_        = io::require_field<int>(cfg, "eos_token_id");
     out.max_seq_len_         = io::require_field<std::size_t>(cfg, "max_position_embeddings");
     out.tie_word_embeddings_ = io::require_field<bool>(cfg, "tie_word_embeddings");
 

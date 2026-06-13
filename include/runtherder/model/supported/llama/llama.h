@@ -146,4 +146,7 @@ struct LlamaLogits {
                                         std::span<const int> token_ids,
                                         cudaStream_t         stream = nullptr);
 
+[[nodiscard]] std::size_t llama_scratch_bytes(const LlamaConfig& config,
+                                              std::size_t        max_batch_tokens);
+
 }  // namespace runtherder::model
