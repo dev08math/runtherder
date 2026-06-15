@@ -1,9 +1,12 @@
 #pragma once
 
+#include <cstddef>
 #include <span>
 
 #include <cuda_runtime.h>
 
+#include <runtherder/device/scratch_arena.cuh>
+#include <runtherder/engine/context.h>
 #include <runtherder/model/supported/llama/llama.h>
 #include <runtherder/model/upload.cuh>
 
@@ -24,11 +27,13 @@ namespace runtherder::model::qwen3 {
  * @pre weights arranged by arrange() against config. token_ids non empty.
  * @note Async. Returns last token logits.
  */
-[[nodiscard]] LlamaLogits forward(const LlamaWeights&  weights,
-                                  const LlamaConfig&   config,
-                                  ModelContext&        ctx,
-                                  std::span<const int> token_ids,
-                                  cudaStream_t         stream = nullptr);
+[[nodiscard]] LlamaLogits forward(const LlamaWeights&    weights,
+                                  const LlamaConfig&     config,
+                                  device::ScratchArena&  scratch,
+                                  const int*             dev_token_ids,
+                                  engine::EngineContext& ctx,
+                                  std::size_t            n,
+                                  cudaStream_t           stream = nullptr);
 
 [[nodiscard]] std::size_t scratch_bytes(const LlamaConfig& config,
                                         std::size_t        max_batch_tokens);

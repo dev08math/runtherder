@@ -113,12 +113,13 @@ std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_token
     return bf16_elems * sizeof(__nv_bfloat16) + n * sizeof(int) + kAllocs * kAlign;
 }
 
-LlamaLogits forward(const LlamaWeights&  weights,
-                    const LlamaConfig&   config,
-                    ModelContext&        ctx,
-                    std::span<const int> token_ids,
-                    cudaStream_t         stream) {
-    const std::size_t n = token_ids.size();
+LlamaLogits forward(const LlamaWeights&    weights,
+                    const LlamaConfig&     config,
+                    device::ScratchArena&  scratch,
+                    const int*             dev_token_ids,
+                    engine::EngineContext& ctx,
+                    std::size_t            n,
+                    cudaStream_t           stream) {
     RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
 
     const std::size_t hidden_dim = config.base().hidden_dim();
@@ -128,8 +129,8 @@ LlamaLogits forward(const LlamaWeights&  weights,
     const int n_int      = static_cast<int>(n);
     const int hidden_int = static_cast<int>(hidden_dim);
 
-    ctx.scratch().reset();
-    const int* ids = ctx.upload_token_ids(token_ids);
+    scratch.reset();
+    const int* ids = dev_token_ids;
 
     const int num_q_heads  = static_cast<int>(config.num_heads());
     const int num_kv_heads = static_cast<int>(config.num_kv_heads());
@@ -138,23 +139,23 @@ LlamaLogits forward(const LlamaWeights&  weights,
     const std::size_t intermediate_dim = config.intermediate_dim();
     const int         inter_int        = static_cast<int>(intermediate_dim);
 
-    __nv_bfloat16* hidden     = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
-    __nv_bfloat16* normed     = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
-    __nv_bfloat16* q          = ctx.scratch().alloc<__nv_bfloat16>(n * q_dim);
-    __nv_bfloat16* k          = ctx.scratch().alloc<__nv_bfloat16>(n * kv_dim);
-    __nv_bfloat16* v          = ctx.scratch().alloc<__nv_bfloat16>(n * kv_dim);
-    __nv_bfloat16* attn       = ctx.scratch().alloc<__nv_bfloat16>(n * q_dim);
-    __nv_bfloat16* attn_proj  = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
-    __nv_bfloat16* ffn_normed = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
-    __nv_bfloat16* gate       = ctx.scratch().alloc<__nv_bfloat16>(n * intermediate_dim);
-    __nv_bfloat16* up         = ctx.scratch().alloc<__nv_bfloat16>(n * intermediate_dim);
-    __nv_bfloat16* mlp_out    = ctx.scratch().alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* hidden     = scratch.alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* normed     = scratch.alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* q          = scratch.alloc<__nv_bfloat16>(n * q_dim);
+    __nv_bfloat16* k          = scratch.alloc<__nv_bfloat16>(n * kv_dim);
+    __nv_bfloat16* v          = scratch.alloc<__nv_bfloat16>(n * kv_dim);
+    __nv_bfloat16* attn       = scratch.alloc<__nv_bfloat16>(n * q_dim);
+    __nv_bfloat16* attn_proj  = scratch.alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* ffn_normed = scratch.alloc<__nv_bfloat16>(n * hidden_dim);
+    __nv_bfloat16* gate       = scratch.alloc<__nv_bfloat16>(n * intermediate_dim);
+    __nv_bfloat16* up         = scratch.alloc<__nv_bfloat16>(n * intermediate_dim);
+    __nv_bfloat16* mlp_out    = scratch.alloc<__nv_bfloat16>(n * hidden_dim);
 
     kernels::embedding_lookup_bf16_forward(
         hidden, bf16(weights.token_embedding()), ids, n_int, hidden_int);
 
     // Positions assume single sequence prefill, not prefix caching.
-    int*             positions = ctx.scratch().alloc<int>(n);
+    int*             positions = scratch.alloc<int>(n);
     std::vector<int> positions_host(n);
     std::iota(positions_host.begin(), positions_host.end(), 0);
     RUNTHERDER_CUDA_CHECK(cudaMemcpy(positions, positions_host.data(),
@@ -217,7 +218,7 @@ LlamaLogits forward(const LlamaWeights&  weights,
         n_int, hidden_int, config.rms_norm_eps());
 
     const int      vocab_int = static_cast<int>(config.base().vocab_size());
-    __nv_bfloat16* logits    = ctx.scratch().alloc<__nv_bfloat16>(vocab_int);
+    __nv_bfloat16* logits    = scratch.alloc<__nv_bfloat16>(vocab_int);
 
     const __nv_bfloat16* last = normed + static_cast<std::size_t>(n_int - 1) * hidden_dim;
     ctx.matmul().linear_bf16(logits, last, bf16(weights.lm_head()),

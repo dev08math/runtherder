@@ -10,8 +10,10 @@
 #include <cuda_runtime.h>
 
 #include <runtherder/device/memory.cuh>
+#include <runtherder/device/scratch_arena.cuh>
+#include <runtherder/engine/context.h>
+#include <runtherder/model/architecture.h>
 #include <runtherder/model/config.h>
-#include <runtherder/model/context.h>
 #include <runtherder/model/sharded_safetensors.h>
 #include <runtherder/model/weights.h>
 
@@ -138,15 +140,36 @@ struct LlamaLogits {
     int                  vocab_size;
 };
 
-// Llama family forward: full layer stack, final norm, lm_head on the last token.
-// Async on stream.
-[[nodiscard]] LlamaLogits llama_forward(const LlamaWeights&  weights,
-                                        const LlamaConfig&   config,
-                                        ModelContext&        ctx,
-                                        std::span<const int> token_ids,
-                                        cudaStream_t         stream = nullptr);
-
 [[nodiscard]] std::size_t llama_scratch_bytes(const LlamaConfig& config,
                                               std::size_t        max_batch_tokens);
+
+/**
+ * @brief Llama family model behind the ModelArchitecture seam. Covers Qwen 3
+ *        through the family loader. Owns config, weights, and its own forward
+ *        scratch plus token staging, both sized for max_batch_tokens.
+ * @note forward() bails via RUNTHERDER_CHECK if token_ids exceeds
+ *       max_batch_tokens.
+ */
+class LlamaModel final : public ModelArchitecture {
+public:
+    [[nodiscard]] static LlamaModel load(const std::filesystem::path& model_dir,
+                                         std::size_t                  max_batch_tokens);
+
+    [[nodiscard]] Logits forward(engine::EngineContext& ctx,
+                                 std::span<const int>   token_ids,
+                                 cudaStream_t           stream = nullptr) override;
+
+    [[nodiscard]] const LlamaConfig&  config()  const noexcept { return config_; }
+    [[nodiscard]] const LlamaWeights& weights() const noexcept { return weights_; }
+
+private:
+    LlamaModel(LlamaConfig config, LlamaWeights weights, std::size_t max_batch_tokens);
+
+    LlamaConfig                  config_;
+    LlamaWeights                 weights_;
+    std::size_t                  max_batch_tokens_;
+    device::ScratchArena         scratch_;
+    device::DeviceUniquePtr<int> staging_;
+};
 
 }  // namespace runtherder::model

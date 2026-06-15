@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include <runtherder/check.h>
+#include <runtherder/device/check.cuh>
 #include <runtherder/io/json_helpers.h>
 #include <runtherder/model/supported/llama/qwen3.h>
 #include <runtherder/model/upload.cuh>
@@ -82,19 +83,6 @@ LlamaWeights LlamaWeights::load(const ShardedSafetensors& reader, const LlamaCon
     return LlamaWeights{};
 }
 
-LlamaLogits llama_forward(const LlamaWeights&  weights,
-                          const LlamaConfig&   config,
-                          ModelContext&        ctx,
-                          std::span<const int> token_ids,
-                          cudaStream_t         stream) {
-    switch (config.base().architecture()) {
-        case ArchitectureKind::Qwen3:
-            return qwen3::forward(weights, config, ctx, token_ids, stream);
-    }
-    RUNTHERDER_CHECK(false, "architecture not in Llama family");
-    return LlamaLogits{};
-}
-
 std::size_t llama_scratch_bytes(const LlamaConfig& config, std::size_t max_batch_tokens) {
     switch (config.base().architecture()) {
         case ArchitectureKind::Qwen3:
@@ -102,6 +90,44 @@ std::size_t llama_scratch_bytes(const LlamaConfig& config, std::size_t max_batch
     }
     RUNTHERDER_CHECK(false, "architecture not in Llama family");
     return 0;
+}
+
+LlamaModel::LlamaModel(LlamaConfig config, LlamaWeights weights, std::size_t max_batch_tokens)
+    : config_(std::move(config)),
+      weights_(std::move(weights)),
+      max_batch_tokens_(max_batch_tokens),
+      scratch_(llama_scratch_bytes(config_, max_batch_tokens)),
+      staging_(device::make_device_unique<int>(max_batch_tokens)) {
+    RUNTHERDER_CHECK(max_batch_tokens_ >= 1, "max_batch_tokens must be >= 1");
+}
+
+LlamaModel LlamaModel::load(const std::filesystem::path& model_dir,
+                            std::size_t                  max_batch_tokens) {
+    LlamaConfig  config  = LlamaConfig::load(model_dir);
+    auto         reader  = ShardedSafetensors::open(model_dir);
+    LlamaWeights weights = LlamaWeights::load(reader, config);
+    return LlamaModel(std::move(config), std::move(weights), max_batch_tokens);
+}
+
+Logits LlamaModel::forward(engine::EngineContext& ctx,
+                           std::span<const int>   token_ids,
+                           cudaStream_t           stream) {
+    const std::size_t n = token_ids.size();
+    RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
+    RUNTHERDER_CHECK(n <= max_batch_tokens_, "token count exceeds model capacity");
+
+    RUNTHERDER_CUDA_CHECK(cudaMemcpy(staging_.get(), token_ids.data(),
+                                     n * sizeof(int), cudaMemcpyHostToDevice));
+
+    switch (config_.base().architecture()) {
+        case ArchitectureKind::Qwen3: {
+            const LlamaLogits out =
+                qwen3::forward(weights_, config_, scratch_, staging_.get(), ctx, n, stream);
+            return Logits{out.logits, out.vocab_size};
+        }
+    }
+    RUNTHERDER_CHECK(false, "architecture not in Llama family");
+    return Logits{nullptr, 0};
 }
 
 }  // namespace runtherder::model

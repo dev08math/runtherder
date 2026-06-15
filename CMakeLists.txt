@@ -77,6 +77,7 @@ target_link_libraries(runtherder PRIVATE
     runtherder_headers
     runtherder_kernels
     runtherder_model
+    runtherder_engine
     runtherder_attention
     runtherder_sampling
     runtherder_tokenizer
@@ -116,7 +117,6 @@ add_library(runtherder_model STATIC
     src/model/safetensors.cpp
     src/model/sharded_safetensors.cpp
     src/model/config.cpp
-    src/model/context.cu
     src/model/upload.cu
     src/model/supported/llama/llama.cu
     src/model/supported/llama/qwen3.cu
@@ -127,6 +127,17 @@ set_target_properties(runtherder_model PROPERTIES
 target_link_libraries(runtherder_model
     PUBLIC  runtherder_headers runtherder_kernels
     PRIVATE nlohmann_json::nlohmann_json
+)
+
+add_library(runtherder_engine STATIC
+    src/engine/context.cu
+    src/engine/generator.cu
+)
+set_target_properties(runtherder_engine PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+target_link_libraries(runtherder_engine
+    PUBLIC runtherder_headers runtherder_model runtherder_sampling runtherder_attention runtherder_kernels
 )
 
 option(RUNTHERDER_BUILD_TESTS "Build runtherder tests" ON)
