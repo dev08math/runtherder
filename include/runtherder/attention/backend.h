@@ -3,6 +3,8 @@
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
+#include <runtherder/attention/kv_view.h>
+
 namespace runtherder::attention {
 
 /**
@@ -19,13 +21,9 @@ struct AttnConfig {
 };
 
 /**
- * @brief Attention backend swap seam. A naive prefill kernel today, a custom
- *        optimized kernel later, each satisfying run(). Head configuration is
- *        fixed at construction. Move only through the concrete type.
- *
- * Prefill only for now: every key is in the caller scratch, full causal over
- * num_tokens. KV cache and a decode path land in a later slice that revisits
- * this contract.
+ * @brief Attention backend swap seam. A naive kernel today, a custom optimized
+ *        kernel later, each satisfying run(). Head configuration is fixed at
+ *        construction.
  */
 class AttentionBackend {
 public:
@@ -35,18 +33,14 @@ public:
     AttentionBackend& operator=(const AttentionBackend&) = delete;
 
     /**
-     * @brief Full causal prefill attention over q, k, v in caller scratch.
-     *        Writes attention output to out.
-     * @pre q and out [num_tokens, num_q_heads, head_dim], k and v
-     *      [num_tokens, num_kv_heads, head_dim], all device, post RoPE and
-     *      post q/k norm. out distinct from q, k, v. num_tokens >= 1.
-     * @note Async on stream. Result not valid until the stream is synchronized.
+     * @brief Causal attention of n_new query tokens against the cached keys and
+     *        values in kv. Writes attention output to out.
      */
     virtual void run(__nv_bfloat16*       out,
                      const __nv_bfloat16* q,
-                     const __nv_bfloat16* k,
-                     const __nv_bfloat16* v,
-                     int                  num_tokens,
+                     const KVView&        kv,
+                     int                  n_new,
+                     int                  cache_len,
                      cudaStream_t         stream) = 0;
 
 protected:

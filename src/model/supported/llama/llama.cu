@@ -111,6 +111,7 @@ LlamaModel LlamaModel::load(const std::filesystem::path& model_dir,
 
 Logits LlamaModel::forward(engine::EngineContext& ctx,
                            std::span<const int>   token_ids,
+                           int                    start_pos,
                            cudaStream_t           stream) {
     const std::size_t n = token_ids.size();
     RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
@@ -122,7 +123,7 @@ Logits LlamaModel::forward(engine::EngineContext& ctx,
     switch (config_.base().architecture()) {
         case ArchitectureKind::Qwen3: {
             const LlamaLogits out =
-                qwen3::forward(weights_, config_, scratch_, staging_.get(), ctx, n, stream);
+                qwen3::forward(weights_, config_, scratch_, staging_.get(), ctx, n, start_pos, stream);
             return Logits{out.logits, out.vocab_size};
         }
     }

@@ -158,9 +158,9 @@ void run_case(int num_tokens,
     k_dev.copy_from_host(k_host.data());
     v_dev.copy_from_host(v_host.data());
 
-    runtherder::kernels::attention_prefill_bf16(
+    runtherder::kernels::attention_causal_bf16(
         out_dev.data(), q_dev.data(), k_dev.data(), v_dev.data(),
-        num_tokens, num_q_heads, num_kv_heads, head_dim, scale, nullptr);
+        num_tokens, /*cache_len=*/0, num_q_heads, num_kv_heads, head_dim, scale, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
 
     std::vector<__nv_bfloat16> out(q_count);
@@ -173,6 +173,60 @@ void run_case(int num_tokens,
     EXPECT_GE(cmp.cosine_similarity, kCosFloor)
         << "num_tokens=" << num_tokens << " num_q_heads=" << num_q_heads
         << " num_kv_heads=" << num_kv_heads << " head_dim=" << head_dim;
+}
+
+// Cached path: query only the last n_new tokens against a cache of
+// cache_len + n_new keys. Equivalent to a full prefill keeping its tail rows.
+void run_decode_case(int cache_len,
+                     int n_new,
+                     int num_q_heads,
+                     int num_kv_heads,
+                     int head_dim) {
+    const int         total = cache_len + n_new;
+    const float       scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    const std::size_t q_full =
+        static_cast<std::size_t>(total) * num_q_heads * head_dim;
+    const std::size_t kv_full =
+        static_cast<std::size_t>(total) * num_kv_heads * head_dim;
+
+    auto q_host = make_bf16_random(q_full,  1.0f, 0xA11CEu);
+    auto k_host = make_bf16_random(kv_full, 1.0f, 0xB0Bu);
+    auto v_host = make_bf16_random(kv_full, 1.0f, 0xCAFEu);
+
+    auto expected_full = attention_cpu_reference(
+        q_host, k_host, v_host,
+        total, num_q_heads, num_kv_heads, head_dim, scale);
+
+    const std::size_t q_new =
+        static_cast<std::size_t>(n_new) * num_q_heads * head_dim;
+    const std::size_t q_off =
+        static_cast<std::size_t>(cache_len) * num_q_heads * head_dim;
+
+    DeviceBuffer<__nv_bfloat16> q_dev(q_new);
+    DeviceBuffer<__nv_bfloat16> k_dev(kv_full);
+    DeviceBuffer<__nv_bfloat16> v_dev(kv_full);
+    DeviceBuffer<__nv_bfloat16> out_dev(q_new);
+    q_dev.copy_from_host(q_host.data() + q_off);
+    k_dev.copy_from_host(k_host.data());
+    v_dev.copy_from_host(v_host.data());
+
+    runtherder::kernels::attention_causal_bf16(
+        out_dev.data(), q_dev.data(), k_dev.data(), v_dev.data(),
+        n_new, cache_len, num_q_heads, num_kv_heads, head_dim, scale, nullptr);
+    RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
+
+    std::vector<__nv_bfloat16> out(q_new);
+    out_dev.copy_to_host(out.data());
+
+    const std::vector<__nv_bfloat16> expected(
+        expected_full.begin() + static_cast<std::ptrdiff_t>(q_off),
+        expected_full.end());
+
+    const auto cmp = compare_bf16(expected, out);
+    EXPECT_LE(cmp.max_abs_err, kAbsTol)
+        << "cache_len=" << cache_len << " n_new=" << n_new;
+    EXPECT_GE(cmp.cosine_similarity, kCosFloor)
+        << "cache_len=" << cache_len << " n_new=" << n_new;
 }
 
 }  // namespace
@@ -198,4 +252,16 @@ TEST(AttentionPrefillBF16, MaxHeadDim) {
 
 TEST(AttentionPrefillBF16, LongerPrefill) {
     run_case(64, 32, 8, 128);
+}
+
+// Single new token against a non empty cache, the decode step shape.
+TEST(AttentionCausalBF16, DecodeSingleToken) {
+    run_decode_case(/*cache_len=*/15, /*n_new=*/1, /*num_q_heads=*/32,
+                    /*num_kv_heads=*/8, /*head_dim=*/128);
+}
+
+// Chunked prefill shape, several new tokens onto an existing cache.
+TEST(AttentionCausalBF16, DecodeChunk) {
+    run_decode_case(/*cache_len=*/10, /*n_new=*/6, /*num_q_heads=*/8,
+                    /*num_kv_heads=*/2, /*head_dim=*/64);
 }

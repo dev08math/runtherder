@@ -10,13 +10,14 @@ NaiveAttention::NaiveAttention(const AttnConfig& config) noexcept
 void NaiveAttention::run(
     __nv_bfloat16*       out,
     const __nv_bfloat16* q,
-    const __nv_bfloat16* k,
-    const __nv_bfloat16* v,
-    int                  num_tokens,
+    const KVView&        kv,
+    int                  n_new,
+    int                  cache_len,
     cudaStream_t         stream) {
-    kernels::attention_prefill_bf16(
-        out, q, k, v,
-        num_tokens,
+    kernels::attention_causal_bf16(
+        out, q, kv.k, kv.v,
+        n_new,
+        cache_len,
         config_.num_q_heads,
         config_.num_kv_heads,
         config_.head_dim,

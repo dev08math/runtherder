@@ -33,6 +33,7 @@ namespace runtherder::model::qwen3 {
                                   const int*             dev_token_ids,
                                   engine::EngineContext& ctx,
                                   std::size_t            n,
+                                  int                    start_pos,
                                   cudaStream_t           stream = nullptr);
 
 [[nodiscard]] std::size_t scratch_bytes(const LlamaConfig& config,

@@ -119,6 +119,7 @@ LlamaLogits forward(const LlamaWeights&    weights,
                     const int*             dev_token_ids,
                     engine::EngineContext& ctx,
                     std::size_t            n,
+                    int                    start_pos,
                     cudaStream_t           stream) {
     RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
 
@@ -154,10 +155,9 @@ LlamaLogits forward(const LlamaWeights&    weights,
     kernels::embedding_lookup_bf16_forward(
         hidden, bf16(weights.token_embedding()), ids, n_int, hidden_int);
 
-    // Positions assume single sequence prefill, not prefix caching.
     int*             positions = scratch.alloc<int>(n);
     std::vector<int> positions_host(n);
-    std::iota(positions_host.begin(), positions_host.end(), 0);
+    std::iota(positions_host.begin(), positions_host.end(), start_pos);
     RUNTHERDER_CUDA_CHECK(cudaMemcpy(positions, positions_host.data(),
                                      n * sizeof(int), cudaMemcpyHostToDevice));
 
@@ -193,7 +193,9 @@ LlamaLogits forward(const LlamaWeights&    weights,
             q, k, positions, n_int, num_q_heads, num_kv_heads, head_dim,
             config.rope_theta());
 
-        ctx.attention().run(attn, q, k, v, n_int, stream);
+        ctx.kv_cache().append(static_cast<int>(i), k, v, n_int, start_pos, stream);
+        const attention::KVView kv = ctx.kv_cache().view(static_cast<int>(i), start_pos + n_int);
+        ctx.attention().run(attn, q, kv, n_int, start_pos, stream);
 
         ctx.matmul().linear_bf16(attn_proj, attn, bf16(layer.wo),
                                  n_int, hidden_int, static_cast<int>(q_dim));

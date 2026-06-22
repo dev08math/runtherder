@@ -15,6 +15,7 @@
 #include <runtherder/device/check.cuh>
 #include <runtherder/engine/context.h>
 #include <runtherder/engine/generator.h>
+#include <runtherder/engine/kv_cache.h>
 #include <runtherder/model/supported/llama/llama.h>
 #include <runtherder/model/weights.h>
 #include <runtherder/sampling/sampler.h>
@@ -60,7 +61,8 @@ int main(int argc, char** argv) {
     const std::vector<int> ids       = tokenizer.encode(prompt);
     RUNTHERDER_CHECK(!ids.empty(), "prompt encoded to zero tokens");
 
-    const std::size_t max_batch_tokens = ids.size() + static_cast<std::size_t>(max_new_tokens);
+    const std::size_t max_batch_tokens = ids.size();
+    const std::size_t max_seq_len      = ids.size() + static_cast<std::size_t>(max_new_tokens);
 
     auto model = m::LlamaModel::load(dir, max_batch_tokens);
 
@@ -103,7 +105,12 @@ int main(int argc, char** argv) {
     auto backend = runtherder::attention::make_attention_backend(
         runtherder::attention::BackendKind::Naive, attn);
 
-    eng::EngineContext ctx(max_batch_tokens, std::move(backend));
+    eng::KVCache kv_cache(
+        static_cast<int>(model.config().base().num_layers()),
+        static_cast<int>(max_seq_len),
+        static_cast<int>(model.config().num_kv_heads()),
+        head_dim);
+    eng::EngineContext ctx(max_batch_tokens, std::move(backend), std::move(kv_cache));
 
     std::random_device            rd;
     runtherder::sampling::Sampler sampler(static_cast<int>(model.config().base().vocab_size()), rd());

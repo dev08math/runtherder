@@ -28,25 +28,26 @@ __device__ float qk_dot(
 // passes (max, then exp weighted sum), recomputing the q.k dot each pass to
 // avoid storing a score row. Readable reference, replaced by a flash style
 // kernel later.
-__global__ void attention_prefill_bf16_kernel(
+__global__ void attention_causal_bf16_kernel(
     __nv_bfloat16* __restrict__       out,
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
-    int                               num_tokens,
+    int                               n_new,
+    int                               cache_len,
     int                               num_q_heads,
     int                               num_kv_heads,
     int                               head_dim,
     float                             scale) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_tokens * num_q_heads) {
+    if (idx >= n_new * num_q_heads) {
         return;
     }
 
-    const int qt     = idx / num_q_heads;  // query token i
-    const int qh     = idx % num_q_heads;  // query head h
+    const int qt     = idx / num_q_heads;
+    const int qh     = idx % num_q_heads;
     const int kvh    = qh / (num_q_heads / num_kv_heads);
-    const int n_keys = qt + 1;  // causal, keys 0 .. qt
+    const int n_keys = cache_len + qt + 1;  // causal, keys 0 .. cache_len + qt
 
     const __nv_bfloat16* q_row =
         q + (static_cast<long long>(qt) * num_q_heads + qh) * head_dim;
@@ -86,18 +87,20 @@ __global__ void attention_prefill_bf16_kernel(
 
 }  // namespace
 
-void attention_prefill_bf16(
+void attention_causal_bf16(
     __nv_bfloat16*       out,
     const __nv_bfloat16* q,
     const __nv_bfloat16* k,
     const __nv_bfloat16* v,
-    int                  num_tokens,
+    int                  n_new,
+    int                  cache_len,
     int                  num_q_heads,
     int                  num_kv_heads,
     int                  head_dim,
     float                scale,
     cudaStream_t         stream) {
-    RUNTHERDER_CHECK(num_tokens   >= 1, "num_tokens must be >= 1");
+    RUNTHERDER_CHECK(n_new        >= 1, "n_new must be >= 1");
+    RUNTHERDER_CHECK(cache_len    >= 0, "cache_len must be >= 0");
     RUNTHERDER_CHECK(num_q_heads  >= 1, "num_q_heads must be >= 1");
     RUNTHERDER_CHECK(num_kv_heads >= 1, "num_kv_heads must be >= 1");
     RUNTHERDER_CHECK(num_q_heads % num_kv_heads == 0,
@@ -105,11 +108,11 @@ void attention_prefill_bf16(
     RUNTHERDER_CHECK(head_dim >= 1,           "head_dim must be >= 1");
     RUNTHERDER_CHECK(head_dim <= kMaxHeadDim, "head_dim exceeds kMaxHeadDim (256)");
 
-    const int total = num_tokens * num_q_heads;
+    const int total = n_new * num_q_heads;
     const int block = 128;
     const int grid  = (total + block - 1) / block;
-    attention_prefill_bf16_kernel<<<grid, block, 0, stream>>>(
-        out, q, k, v, num_tokens, num_q_heads, num_kv_heads, head_dim, scale);
+    attention_causal_bf16_kernel<<<grid, block, 0, stream>>>(
+        out, q, k, v, n_new, cache_len, num_q_heads, num_kv_heads, head_dim, scale);
     RUNTHERDER_CUDA_CHECK_LAST();
 }
 

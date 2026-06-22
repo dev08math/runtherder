@@ -27,6 +27,7 @@ public:
 
     [[nodiscard]] virtual Logits forward(engine::EngineContext& ctx,
                                          std::span<const int>   token_ids,
+                                         int                    start_pos,
                                          cudaStream_t           stream = nullptr) = 0;
 };
 
