@@ -5,12 +5,25 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <type_traits>
 
 #include <runtherder/device/memory.cuh>
+#include <runtherder/device/scratch_arena.cuh>
 
 namespace runtherder::kernels {
+
+// Working set for one linear_w8a8 call. from_arena carves the three sub buffers
+// from the pool.
+struct W8A8Buffer {
+    std::int8_t*  q;        // [m, k]
+    float*        x_scale;  // [m]
+    std::int32_t* acc;      // [m, n]
+
+    [[nodiscard]] static W8A8Buffer from_arena(device::ScratchArena& arena,
+                                               int m, int n, int k);
+};
 
 /**
  * @brief Reusable cuBLASLt context for BF16 matmuls. Owns the library handle
@@ -27,10 +40,9 @@ public:
     Matmul& operator=(const Matmul&)     = delete;
 
     /**
-     * @brief y = x · Wᵀ. BF16 storage, FP32 accumulation, no bias. Row major:
+     * @brief y = x · Wᵀ. BF16 storage, FP32 accumulation. Row major:
      *        x [m, k], weight [n, k] (HF Linear), y [m, n].
      * @pre Device pointers. m, n, k >= 1. y distinct from x and weight.
-     * @note Async on stream. Result not valid until the stream is synchronized.
      * @note Matches a double precision reference within max abs 5e-2,
      *       cosine 0.9999.
      */
@@ -42,9 +54,21 @@ public:
                      int                  k,
                      cudaStream_t         stream = nullptr);
 
+    /**
+     * @brief y = x · Wᵀ, int8 compute, bf16 out. weight [n,k] int8, w_scale [n]
+     *        per output channel. k % 8 == 0.
+     */
+    void linear_w8a8(__nv_bfloat16*       y,
+                     const __nv_bfloat16* x,
+                     const std::int8_t*   weight,
+                     const __nv_bfloat16* w_scale,
+                     const W8A8Buffer&    scratch,
+                     int                  m,
+                     int                  n,
+                     int                  k,
+                     cudaStream_t         stream = nullptr);
+
 private:
-    // The handle comes from cublasLtCreate and is released by cublasLtDestroy,
-    // not delete. unique_ptr defaults to delete, so the cleanup is wired here.
     struct LtDeleter {
         void operator()(cublasLtHandle_t handle) const noexcept {
             if (handle != nullptr) {

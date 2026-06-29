@@ -24,6 +24,8 @@ namespace runtherder::model::qwen3 {
 
 namespace {
 
+// An integer tensor also drains its sibling <name>_scale and attaches it as
+// QuantMeta. A float tensor returns with no quant.
 [[nodiscard]] Tensor take(ByName& m, const std::string& name) {
     auto it = m.find(name);
     if (it == m.end()) [[unlikely]] {
@@ -32,6 +34,10 @@ namespace {
     }
     Tensor out = std::move(it->second);
     m.erase(it);
+    if (!is_float_dtype(out.dtype)) {
+        Tensor scale = take(m, name + "_scale");
+        out.quant    = QuantMeta{scale.data, scale.dtype, 0};
+    }
     return out;
 }
 
@@ -53,8 +59,6 @@ LlamaWeights arrange(Uploaded uploaded, const LlamaConfig& config) {
 
     Tensor lm_head;
     if (config.base().tie_word_embeddings()) {
-        // Tensor is move only because of QuantMeta. Build a fresh view onto the
-        // embedding span rather than copy assigning.
         lm_head = Tensor{
             token_embedding.data,
             token_embedding.shape,

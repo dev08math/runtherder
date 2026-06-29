@@ -1,24 +1,21 @@
 #pragma once
 
-#include <cuda_bf16.h>
-#include <cuda_fp16.h>
-
 #include <cstddef>
 #include <optional>
 #include <span>
 #include <vector>
 
-#include <runtherder/device/memory.cuh>
 #include <runtherder/model/dtype.h>
 
 namespace runtherder::model {
 
-// TODO:  quantized weights not loaded yet. Move scales and zeros into the
-// slab as Tensors when they are, to match the rest of the graph.
+// Quant sidecar for an INT8 weight Tensor. scales is a view into the same device
+// slab as the weights, not separately owned. group_size 0 means one scale per
+// output channel.
 struct QuantMeta {
-    device::DeviceUniquePtr<half> scales;
-    device::DeviceUniquePtr<half> zeros;
-    std::size_t group_size = 0;
+    std::span<std::byte>  scales;
+    DType                 scale_dtype = DType::FP16;
+    std::size_t           group_size  = 0;
 };
 
 /**

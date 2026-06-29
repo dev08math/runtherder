@@ -37,6 +37,7 @@ add_library(runtherder_kernels STATIC
     src/kernels/matmul.cu
     src/kernels/embedding.cu
     src/kernels/attention.cu
+    src/kernels/quantization.cu
 )
 set_target_properties(runtherder_kernels PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
