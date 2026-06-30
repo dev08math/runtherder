@@ -10,9 +10,8 @@
 namespace runtherder::engine {
 
 /**
- * @brief Engine owned runtime handed to the model forward: the matmul handle,
- *        the token budget, the injected attention backend, and the KV cache.
- *        The model reads what it needs and owns its own scratch.
+ * @brief Runtime the engine owns and passes to forward: matmul, attention
+ *        backend, KV cache, token budget.
  */
 class EngineContext {
 public:

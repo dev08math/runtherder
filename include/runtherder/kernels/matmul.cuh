@@ -14,8 +14,9 @@
 
 namespace runtherder::kernels {
 
-// Working set for one linear_w8a8 call. from_arena carves the three sub buffers
-// from the pool.
+/**
+ * @brief Scratch memory for one linear_w8a8 call, carved from the arena.
+ */
 struct W8A8Buffer {
     std::int8_t*  q;        // [m, k]
     float*        x_scale;  // [m]
@@ -26,9 +27,7 @@ struct W8A8Buffer {
 };
 
 /**
- * @brief Reusable cuBLASLt context for BF16 matmuls. Owns the library handle
- *        and a device workspace, created once and reused across calls.
- * @note Move only.
+ * @brief Reusable matmul context for bf16 and int8, built once.
  */
 class Matmul {
 public:
@@ -40,11 +39,11 @@ public:
     Matmul& operator=(const Matmul&)     = delete;
 
     /**
-     * @brief y = x · Wᵀ. BF16 storage, FP32 accumulation. Row major:
-     *        x [m, k], weight [n, k] (HF Linear), y [m, n].
-     * @pre Device pointers. m, n, k >= 1. y distinct from x and weight.
-     * @note Matches a double precision reference within max abs 5e-2,
-     *       cosine 0.9999.
+     * @brief y = x · Wᵀ. bf16 storage, fp32 accumulation.
+     * @param y       [m, n]
+     * @param x       [m, k]
+     * @param weight  [n, k]
+     * @note Matches a double precision reference within max abs 5e-2, cosine 0.9999.
      */
     void linear_bf16(__nv_bfloat16*       y,
                      const __nv_bfloat16* x,
@@ -55,8 +54,12 @@ public:
                      cudaStream_t         stream = nullptr);
 
     /**
-     * @brief y = x · Wᵀ, int8 compute, bf16 out. weight [n,k] int8, w_scale [n]
-     *        per output channel. k % 8 == 0.
+     * @brief y = x · Wᵀ, int8 compute, bf16 out.
+     * @param y        [m, n]
+     * @param x        [m, k]
+     * @param weight   [n, k]
+     * @param w_scale  [n], per output channel
+     * @note Requires a GPU with int8 tensor core support.
      */
     void linear_w8a8(__nv_bfloat16*       y,
                      const __nv_bfloat16* x,

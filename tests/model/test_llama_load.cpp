@@ -30,6 +30,7 @@ namespace qwen3 = runtherder::model::qwen3;
 // The Qwen 3 4B config.json verbatim. The untied variant flips one field.
 constexpr const char* kQwen3ConfigJson = R"json({
   "architectures": ["Qwen3ForCausalLM"],
+  "eos_token_id": 151645,
   "head_dim": 128,
   "hidden_act": "silu",
   "hidden_size": 2560,
@@ -132,7 +133,7 @@ TEST_F(LlamaLoadTest, ConfigParsesQwen3Fields) {
     write_config(dir_, /*tied=*/true);
     const LlamaConfig cfg = LlamaConfig::load(dir_);
 
-    EXPECT_EQ(cfg.base().architecture(), runtherder::model::ArchitectureKind::Qwen3);
+    EXPECT_EQ(cfg.base().model_type(), runtherder::model::ModelType::Qwen3);
     EXPECT_EQ(cfg.base().hidden_dim(), 2560u);
     EXPECT_EQ(cfg.base().num_layers(), 36u);
     EXPECT_EQ(cfg.base().vocab_size(), 151936u);

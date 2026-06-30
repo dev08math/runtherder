@@ -5,14 +5,12 @@
 
 namespace runtherder::kernels {
 
-// Caller contract for both launchers, not checked in the kernel: device
-// pointers 16 byte aligned, num_tokens >= 1, 8 <= hidden_dim <= 16384,
-// hidden_dim % 8 == 0, eps > 0. Async on stream. Matches a double precision
-// reference within max abs 5e-2, cosine 0.9999.
-
 /**
  * @brief y = (x / rms(x)) * g.
- * @note y may alias x.
+ * @param y  [num_tokens, hidden_dim]
+ * @param x  [num_tokens, hidden_dim]
+ * @param g  [hidden_dim]
+ * @note y may alias x. Matches a double precision reference within max abs 5e-2, cosine 0.9999.
  */
 void rmsnorm_bf16_forward(
     __nv_bfloat16*       y,
@@ -24,8 +22,14 @@ void rmsnorm_bf16_forward(
     cudaStream_t         stream = nullptr);
 
 /**
- * @brief h_out = x + residual, then y = (h_out / rms(h_out)) * g.
- * @note h_out may alias x or residual. y must be distinct from h_out.
+ * @brief Fused residual add then rmsnorm. h_out = x + residual, then
+ *        y = (h_out / rms(h_out)) * g. Unlike rmsnorm_bf16_forward it folds the
+ *        residual stream in first, use it for every norm after the first.
+ * @param y         [num_tokens, hidden_dim]
+ * @param h_out     [num_tokens, hidden_dim]
+ * @param x         [num_tokens, hidden_dim]
+ * @param residual  [num_tokens, hidden_dim]
+ * @param g         [hidden_dim]
  */
 void rmsnorm_add_bf16_forward(
     __nv_bfloat16*       y,

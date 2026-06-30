@@ -1,23 +1,30 @@
 #pragma once
 
+#include <algorithm>
+#include <vector>
+
 #include <runtherder/check.h>
 #include <runtherder/sampling/sampler.h>
 
 namespace runtherder::engine {
 
 struct StopCondition {
-    int eos_token;
-    int max_new_tokens;
+    std::vector<int> eos_tokens;
+    int              max_new_tokens;
 };
 
 /**
- * @brief One in flight generation: decode position with per sequence sampling
- *        and stop criteria.
- * @note Construct only via create(), which exits via RUNTHERDER_CHECK on
- *       prompt_len < 1 or max_new_tokens < 1.
+ * @brief Per request state for one in flight generation: decode position,
+ *        sampling params, and stop criteria.
  */
 class SequenceState {
 public:
+    /**
+     * @param seq_id      id for this sequence, passed to OutputSink::on_token
+     * @param prompt_len  number of prompt tokens, >= 1
+     * @param sampling    how the next token is chosen: temperature, top_p, top_k
+     * @param stop        when to stop: eos token set and max new token cap (>= 1)
+     */
     [[nodiscard]] static SequenceState create(int seq_id, int prompt_len,
                                                sampling::SamplingParams sampling,
                                                StopCondition stop) {
@@ -36,7 +43,10 @@ public:
     [[nodiscard]] const StopCondition& stop() const noexcept { return stop_; }
 
     [[nodiscard]] bool reached_max() const noexcept { return position_ >= stop_.max_new_tokens; }
-    [[nodiscard]] bool is_eos(int token) const noexcept { return token == stop_.eos_token; }
+    [[nodiscard]] bool is_eos(int token) const noexcept {
+        return std::find(stop_.eos_tokens.begin(), stop_.eos_tokens.end(), token)
+               != stop_.eos_tokens.end();
+    }
 
 private:
     SequenceState(int seq_id, int prompt_len, sampling::SamplingParams sampling,

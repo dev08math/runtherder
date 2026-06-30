@@ -141,12 +141,22 @@ void run_case(int   seq_len,
     DeviceBuffer<int> pos_dev(static_cast<std::size_t>(seq_len));
     pos_dev.copy_from_host(pos_host.data());
 
+    const int          half = head_dim / 2;
+    std::vector<float> inv_freq_host(static_cast<std::size_t>(half));
+    for (int i = 0; i < half; ++i) {
+        const double exponent =
+            -2.0 * static_cast<double>(i) / static_cast<double>(head_dim);
+        inv_freq_host[static_cast<std::size_t>(i)] =
+            static_cast<float>(std::pow(static_cast<double>(theta_base), exponent));
+    }
+    DeviceBuffer<float> inv_freq_dev(static_cast<std::size_t>(half));
+    inv_freq_dev.copy_from_host(inv_freq_host.data());
+
     runtherder::kernels::rope_bf16(
         q_dev.data(), k_dev.data(),
-        pos_dev.data(), seq_len,
+        pos_dev.data(), inv_freq_dev.data(), seq_len,
         num_q_heads, num_kv_heads,
-        head_dim, theta_base,
-        nullptr);
+        head_dim, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
 
     std::vector<__nv_bfloat16> q_out(q_count);

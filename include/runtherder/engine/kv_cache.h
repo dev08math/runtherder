@@ -40,6 +40,12 @@ public:
     KVCache(const KVCache&)                = delete;
     KVCache& operator=(const KVCache&)     = delete;
 
+    /**
+     * @brief Copies n_new keys and values into layer at row at_pos.
+     * @param k       [n_new, num_kv_heads, head_dim]
+     * @param v       [n_new, num_kv_heads, head_dim]
+     * @param at_pos  row offset to write at, the caller owned write position
+     */
     void append(int layer, const __nv_bfloat16* k, const __nv_bfloat16* v,
                 int n_new, int at_pos, cudaStream_t stream) {
         RUNTHERDER_CHECK(layer >= 0 && layer < num_layers_, "KVCache append layer out of range");

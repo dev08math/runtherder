@@ -4,6 +4,9 @@
 
 namespace runtherder::engine {
 
+/**
+* @brief Streaming sink. on_token fires per emitted token, flush once at the end.
+*/
 class OutputSink {
 public:
     virtual ~OutputSink() = default;

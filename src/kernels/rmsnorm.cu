@@ -50,6 +50,12 @@ __global__ void rmsnorm_bf16_kernel(
     const __nv_bfloat16* __restrict__ g,
     int                               hidden_dim,
     float                             eps) {
+    // One block per token. Pass 1: each thread caches h = x (+ residual when
+    // fused) in registers, accumulates the local sum of squares, and writes
+    // h_out on the fused path. block_reduce_sum (warp shuffle via
+    // warp_reduce_sum, then shared partials) gives the row sum of squares on
+    // thread 0, which forms rrms = rsqrt(ss / hidden_dim + eps). Pass 2 scales
+    // from the register cache, y = h * rrms * g.
     const int row = blockIdx.x;
     const int tid = threadIdx.x;
     const int n_vecs = hidden_dim / kVecWidth;

@@ -9,6 +9,7 @@
 
 namespace runtherder::kernels {
 
+// cuBLASLt backs both linear_bf16 and linear_w8a8.
 Matmul::Matmul() {
     cublasLtHandle_t raw = nullptr;
     RUNTHERDER_CUBLAS_CHECK(cublasLtCreate(&raw));
@@ -126,6 +127,8 @@ void Matmul::linear_w8a8(__nv_bfloat16*       y,
     RUNTHERDER_CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
         desc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transb)));
 
+    // Plain COL layout. The COL32 reorder is required only for int8 output, the
+    // int32 output path takes plain column major.
     cublasLtMatrixLayout_t layout_w = nullptr;
     cublasLtMatrixLayout_t layout_x = nullptr;
     cublasLtMatrixLayout_t layout_y = nullptr;

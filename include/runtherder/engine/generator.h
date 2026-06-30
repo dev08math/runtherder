@@ -12,9 +12,6 @@ namespace runtherder::engine {
 
 /**
  * @brief Autoregressive decode loop for one sequence.
- * @note Re feeds the whole sequence to the forward each step (no KV cache), so
- *       the model's scratch must be sized for prompt.size() + max_new_tokens.
- *       One sequence per call.
  */
 class Generator {
 public:
@@ -22,6 +19,12 @@ public:
               EngineContext&            ctx,
               sampling::Sampler&        sampler) noexcept;
 
+    /**
+     * @brief Prefills prompt, then samples and emits to sink until EOS or max new
+     *        tokens. The EOS token is not emitted.
+     * @param seq   sampling params and stop condition, advanced per token
+     * @param sink  receives each token, flushed at the end
+     */
     void generate(SequenceState& seq, std::span<const int> prompt, OutputSink& sink);
 
 private:

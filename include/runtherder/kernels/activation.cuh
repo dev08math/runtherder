@@ -7,9 +7,11 @@ namespace runtherder::kernels {
 
 /**
  * @brief y[i] = silu(gate[i]) * up[i].
- * @pre Device pointers 16 byte aligned. n >= 8, n % 8 == 0.
- * @note y may alias gate or up. Async on stream. Matches a double precision
- *       reference within max abs 5e-2, cosine 0.9999.
+ * @param y     [n]
+ * @param gate  [n]
+ * @param up    [n]
+ * @note y may alias gate or up. Matches a double precision reference within
+ *       max abs 5e-2, cosine 0.9999.
  */
 void swiglu_bf16_forward(
     __nv_bfloat16*       y,

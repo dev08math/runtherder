@@ -24,6 +24,8 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES OFF)
+
 add_library(runtherder_headers INTERFACE)
 target_include_directories(runtherder_headers INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -121,6 +123,7 @@ add_library(runtherder_model STATIC
     src/model/upload.cu
     src/model/supported/llama/llama.cu
     src/model/supported/llama/qwen3.cu
+    src/model/supported/llama/llama3.cu
 )
 set_target_properties(runtherder_model PROPERTIES
     POSITION_INDEPENDENT_CODE ON

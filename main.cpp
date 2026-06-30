@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
     params.top_p       = 0.8F;
     params.top_k       = 20;
 
-    const eng::StopCondition stop{model.config().base().eos_token_id(), max_new_tokens};
+    const eng::StopCondition stop{model.config().base().eos_token_ids(), max_new_tokens};
     eng::SequenceState seq = eng::SequenceState::create(0, static_cast<int>(ids.size()), params, stop);
 
     eng::VectorSink sink;

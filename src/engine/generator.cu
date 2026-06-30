@@ -21,10 +21,11 @@ void Generator::generate(SequenceState& seq, std::span<const int> prompt, Output
 
     for (;;) {
         const model::Logits out = model_.forward(ctx_, input, start_pos);
-        RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
 
         start_pos += static_cast<int>(input.size());
 
+        // No explicit sync. sample() blocks on a D2H copy that orders after the
+        // default stream forward.
         const int next = sampler_.sample(out.data, seq.sampling());
 
         if (seq.is_eos(next)) {

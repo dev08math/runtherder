@@ -1,10 +1,5 @@
 CompileFlags:
   Add:
-    - -I/home/joseph/Projects/runtherder/include
-    - -I/home/joseph/Projects/runtherder/build/_deps/nlohmann_json-src/include
-    - -I/home/joseph/Projects/runtherder/build/_deps/googletest-src/googletest/include
-    - -I/usr/local/cuda/include
-    - -std=c++20
     - -xcuda
     - --cuda-gpu-arch=sm_89
     - --cuda-path=/usr/local/cuda

@@ -46,6 +46,11 @@ __global__ void quantize_per_token_int8_kernel(
     float* __restrict__               x_scale,
     const __nv_bfloat16* __restrict__ x,
     int                               dim) {
+    // One block per token. Each thread caches its strided slice of the row in
+    // registers while finding the local absmax. block_reduce_max (warp shuffle
+    // via warp_reduce_max, then shared partials) gives the row absmax on thread
+    // 0. The second pass requantizes from the register cache, one global read
+    // per element. Zero row gives scale 0.
     const int row    = blockIdx.x;
     const int tid    = threadIdx.x;
     const int n_vecs = dim / kVecWidth;

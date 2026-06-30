@@ -15,10 +15,10 @@ __global__ void rope_qk_bf16_kernel(
     __nv_bfloat16* __restrict__ q,
     __nv_bfloat16* __restrict__ k,
     const int*     __restrict__ positions,
+    const float*   __restrict__ inv_freq,
     int                         num_q_heads,
     int                         num_kv_heads,
-    int                         head_dim,
-    float                       theta_base) {
+    int                         head_dim) {
     const int token = blockIdx.x;
     const int head  = blockIdx.y;
     const int i     = threadIdx.x;
@@ -31,9 +31,7 @@ __global__ void rope_qk_bf16_kernel(
 
     const int pos = positions[token];
 
-    const float exponent =
-        -2.0f * static_cast<float>(i) / static_cast<float>(head_dim);
-    const float freq  = __powf(theta_base, exponent);
+    const float freq  = inv_freq[i];
     const float theta = static_cast<float>(pos) * freq;
 
     float s, c;
@@ -62,11 +60,11 @@ void rope_bf16(
     __nv_bfloat16* q,
     __nv_bfloat16* k,
     const int*     positions,
+    const float*   inv_freq,
     int            seq_len,
     int            num_q_heads,
     int            num_kv_heads,
     int            head_dim,
-    float          theta_base,
     cudaStream_t   stream) {
     RUNTHERDER_CHECK(seq_len      >= 1, "seq_len must be >= 1");
     RUNTHERDER_CHECK(num_q_heads  >= 1, "num_q_heads must be >= 1");
@@ -74,12 +72,11 @@ void rope_bf16(
     RUNTHERDER_CHECK(head_dim     >= 2, "head_dim must be >= 2");
     RUNTHERDER_CHECK(head_dim % 2 == 0,           "head_dim must be even");
     RUNTHERDER_CHECK(head_dim <= kMaxHeadDim,     "head_dim exceeds kMaxHeadDim (256)");
-    RUNTHERDER_CHECK(theta_base > 0.0f,           "theta_base must be > 0");
 
     const dim3 grid(seq_len, num_q_heads + num_kv_heads);
     const dim3 block(head_dim / 2);
     rope_qk_bf16_kernel<<<grid, block, 0, stream>>>(
-        q, k, positions, num_q_heads, num_kv_heads, head_dim, theta_base);
+        q, k, positions, inv_freq, num_q_heads, num_kv_heads, head_dim);
     RUNTHERDER_CUDA_CHECK_LAST();
 }
 

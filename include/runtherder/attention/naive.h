@@ -7,7 +7,6 @@
 
 namespace runtherder::attention {
 
-// Reference attention backend, one thread per output row.
 class NaiveAttention final : public AttentionBackend {
 public:
     explicit NaiveAttention(const AttnConfig& config) noexcept;

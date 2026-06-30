@@ -8,10 +8,8 @@
 namespace runtherder::attention {
 
 /**
- * @brief Fixed head configuration a backend is built with. Decoupled from the
- *        model layer on purpose, the attention domain does not depend on
- *        LlamaConfig. scale multiplies each score before softmax, normally
- *        1 / sqrt(head_dim).
+ * @brief Head configuration fixed at backend construction. scale multiplies
+ *        each score before softmax, normally 1 / sqrt(head_dim).
  */
 struct AttnConfig {
     int   num_q_heads;
@@ -21,9 +19,7 @@ struct AttnConfig {
 };
 
 /**
- * @brief Attention backend swap seam. A naive kernel today, a custom optimized
- *        kernel later, each satisfying run(). Head configuration is fixed at
- *        construction.
+ * @brief Attention backend selector.
  */
 class AttentionBackend {
 public:
@@ -33,8 +29,10 @@ public:
     AttentionBackend& operator=(const AttentionBackend&) = delete;
 
     /**
-     * @brief Causal attention of n_new query tokens against the cached keys and
-     *        values in kv. Writes attention output to out.
+     * @brief Causal attention. out is [n_new, num_q_heads, head_dim].
+     * @param q          [n_new, num_q_heads, head_dim]
+     * @param kv         cached keys and values, each [cache_len + n_new, num_kv_heads, head_dim]
+     * @param cache_len  keys already cached before these n_new queries
      */
     virtual void run(__nv_bfloat16*       out,
                      const __nv_bfloat16* q,

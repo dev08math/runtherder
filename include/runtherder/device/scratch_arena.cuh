@@ -8,9 +8,9 @@
 namespace runtherder::device {
 
 /**
- * @brief Bump allocator over one device allocation. alloc<T>() carves 256 byte
- *        aligned sub buffers, reset() frees them all at once. No reclaim between
- *        resets, so size the arena to the live sum, not the peak.
+ * @brief Bump allocator over one device buffer, a scratch pad for temporary
+ *        work. alloc<T>() hands out a slice and only moves forward. reset()
+ *        reclaims everything at once, nothing is freed before that.
  */
 class ScratchArena {
 public:

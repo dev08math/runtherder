@@ -5,8 +5,14 @@
 
 namespace runtherder::kernels {
 
-// Causal attention. q,out are [n_new, num_q_heads, head_dim], k,v are
-// [cache_len+n_new, num_kv_heads, head_dim]. out distinct from k,v.
+/**
+ * @brief Causal attention.
+ * @param out  [n_new, num_q_heads, head_dim]
+ * @param q    [n_new, num_q_heads, head_dim]
+ * @param k    [cache_len + n_new, num_kv_heads, head_dim]
+ * @param v    [cache_len + n_new, num_kv_heads, head_dim]
+ * @note out distinct from k, v.
+ */
 void attention_causal_bf16(
     __nv_bfloat16*       out,
     const __nv_bfloat16* q,
