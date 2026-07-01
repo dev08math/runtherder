@@ -15,8 +15,7 @@ namespace runtherder::model {
 using ByName = std::unordered_map<std::string, Tensor, TransparentStringHash, std::equal_to<>>;
 
 /**
- * @brief Result of an architecture agnostic upload of every tensor in a
- *        reader into one device slab.
+ * @brief Result of uploading every tensor in a reader into one device slab.
  * @note arena owns the slab. Every Tensor in by_name is a span into it and
  *       is invalidated when arena is freed.
  */
@@ -27,9 +26,9 @@ struct Uploaded {
 
 /**
  * @brief Copies every tensor in reader into a single device slab.
- * @note Internal to family loaders. Architecture aware arrangement of the
- *       returned by_name into a typed weights graph lives in each family's
- *       own loader.
+ * @param reader the opened safetensors shards to upload.
+ * @note Architecture aware arrangement of the returned by_name into typed
+ *       weights lives in each family's own loader.
  */
 [[nodiscard]] Uploaded upload_all(const ShardedSafetensors& reader);
 

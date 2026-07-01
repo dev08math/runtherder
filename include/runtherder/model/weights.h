@@ -9,9 +9,11 @@
 
 namespace runtherder::model {
 
-// Quant sidecar for an INT8 weight Tensor. scales is a view into the same device
-// slab as the weights, not separately owned. group_size 0 means one scale per
-// output channel.
+/**
+ * @brief Dequant scales and their layout for a quantized weight Tensor.
+ * @note scales views the same device slab as the weights, not separately owned.
+ *       group_size 0 means one scale per output channel.
+ */
 struct QuantMeta {
     std::span<std::byte>  scales;
     DType                 scale_dtype = DType::FP16;
@@ -20,7 +22,7 @@ struct QuantMeta {
 
 /**
  * @brief One weight tensor inside a model's arena.
- * @note data is invalidated when the parent weights graph is destroyed.
+ * @note data is invalidated when the arena backing it is freed.
  */
 struct Tensor {
     std::span<std::byte>      data;

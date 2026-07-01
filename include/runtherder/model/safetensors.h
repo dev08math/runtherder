@@ -19,16 +19,15 @@ namespace runtherder::model {
  * @brief Reader for one safetensors file.
  * @note Spans from bytes() and references from shape() point into the mmap
  *       region and stay valid until this object is destroyed.
- * @note dtype(), shape(), and bytes() exit via RUNTHERDER_CHECK on an unknown
- *       name. contains() is the soft query that returns false instead.
+ * @note dtype(), shape(), and bytes() fail on an unknown name. contains() is
+ *       the soft query that returns false instead.
  */
 class SafetensorsFile {
 public:
     /**
      * @brief Open and index a safetensors file.
      * @pre The file exists, is non empty, and carries a valid header.
-     * @note Any io or parse failure exits via RUNTHERDER_CHECK. No error
-     *       return, no exception.
+     * @note Fails accordingly on any io or parse error.
      */
     [[nodiscard]] static SafetensorsFile open(const std::filesystem::path& path);
 

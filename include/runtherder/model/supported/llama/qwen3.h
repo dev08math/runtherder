@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <span>
 
 #include <cuda_runtime.h>
 
@@ -13,19 +12,25 @@
 namespace runtherder::model::qwen3 {
 
 /**
- * @brief Drains an uploaded tensor map into the Qwen 3 weights graph. upload_all
- *        does the device copy, this only arranges what it produced.
- * @pre uploaded.by_name holds exactly the Qwen 3 tensor set for
- *      config.base().num_layers() layers.
- * @note Bails via RUNTHERDER_CHECK on a missing expected tensor, and on any
- *       tensor left in the map after arrangement.
+ * @brief Builds the Qwen3 weights from an uploaded tensor map.
+ * @param uploaded device tensors from upload_all, consumed here.
+ * @param config   the loaded model hyperparameters.
+ * @note Fails if a required tensor is missing or one is left unused.
  */
 [[nodiscard]] LlamaWeights arrange(Uploaded uploaded, const LlamaConfig& config);
 
 /**
- * @brief Qwen 3 forward skeleton: shared kernel steps plus q_norm/k_norm.
- * @pre weights arranged by arrange() against config. token_ids non empty.
- * @note Async. Returns last token logits.
+ * @brief Runs one Qwen3 forward pass over n tokens. Returns only the last
+ *        token's logits, for the caller to sample the next token from.
+ * @param weights       Qwen3 weights from arrange().
+ * @param config        the loaded model hyperparameters.
+ * @param scratch       forward scratch arena, sized by scratch_bytes().
+ * @param dev_token_ids device buffer of n token ids.
+ * @param ctx           engine context (matmul, attention, KV cache).
+ * @param n             token count, non empty.
+ * @param start_pos     position of the first token in the sequence.
+ * @param stream        CUDA stream for the attention kernels.
+ * @pre weights arranged by arrange() against config.
  */
 [[nodiscard]] LlamaLogits forward(const LlamaWeights&    weights,
                                   const LlamaConfig&     config,
@@ -36,6 +41,12 @@ namespace runtherder::model::qwen3 {
                                   int                    start_pos,
                                   cudaStream_t           stream = nullptr);
 
+/**
+ * @brief Bytes the Qwen3 forward scratch arena needs for up to
+ *        max_batch_tokens tokens.
+ * @param config           the loaded model hyperparameters.
+ * @param max_batch_tokens most tokens a single forward pass will hold.
+ */
 [[nodiscard]] std::size_t scratch_bytes(const LlamaConfig& config,
                                         std::size_t        max_batch_tokens);
 

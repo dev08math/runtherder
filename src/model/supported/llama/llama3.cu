@@ -27,6 +27,10 @@ namespace {
 std::vector<float> rope_inv_freq_llama3(std::size_t        head_dim,
                                         float              theta_base,
                                         const RopeScaling& scaling) {
+    // Rescales the plain RoPE frequencies so Llama3 can handle a longer context,
+    // following HF _compute_llama3_parameters. Slow rotations (low frequency) are
+    // stretched by dividing by factor, fast rotations (high frequency) are left
+    // alone, and the middle band is blended smoothly between the two.
     std::vector<float> inv_freq = rope_inv_freq_plain(head_dim, theta_base);
 
     const double factor           = static_cast<double>(scaling.factor);
@@ -83,6 +87,7 @@ LlamaWeights arrange(Uploaded uploaded, const LlamaConfig& config) {
     Tensor final_norm      = take(m, "model.norm.weight");
 
     Tensor lm_head;
+    // Keys off presence, not the tie flag: the checkpoint ships lm_head even when tied.
     if (m.find("lm_head.weight") != m.end()) {
         lm_head = take(m, "lm_head.weight");
     } else {
@@ -164,6 +169,8 @@ LlamaLogits forward(const LlamaWeights&    weights,
                     cudaStream_t           stream) {
     RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
 
+    // Prefill or decode of n tokens. The projections run W8A8 int8 when the
+    // weight is quantized, there is no q/k norm, and lm_head stays BF16.
     const std::size_t hidden_dim = config.base().hidden_dim();
     const std::size_t q_dim      = config.q_dim();
     const std::size_t kv_dim     = config.kv_dim();

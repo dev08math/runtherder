@@ -101,6 +101,11 @@ LlamaLogits forward(const LlamaWeights&    weights,
                     cudaStream_t           stream) {
     RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
 
+    // Prefill or decode of n tokens at positions [start_pos, start_pos + n).
+    // Embed, then per layer: rmsnorm (fused residual add after layer 0), q/k/v
+    // projections, q/k norm, RoPE, append k/v to the KV cache, attention over the
+    // cached keys, output projection, then the gated MLP (rmsnorm add, gate and up,
+    // SwiGLU, down). A final rmsnorm add, then lm_head on the last token only.
     const std::size_t hidden_dim = config.base().hidden_dim();
     const std::size_t q_dim      = config.q_dim();
     const std::size_t kv_dim     = config.kv_dim();

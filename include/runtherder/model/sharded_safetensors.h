@@ -19,8 +19,8 @@ namespace runtherder::model {
  *       shards are discovered through model.safetensors.index.json.
  * @note Spans from bytes() and references from shape() point into the shard
  *       mmap regions and stay valid until this object is destroyed.
- * @note dtype(), shape(), and bytes() exit via RUNTHERDER_CHECK on an unknown
- *       name. contains() is the soft query that returns false instead.
+ * @note dtype(), shape(), and bytes() fail on an unknown name. contains() is
+ *       the soft query that returns false instead.
  */
 class ShardedSafetensors {
 public:
@@ -28,8 +28,7 @@ public:
      * @brief Open and index every shard in a model directory.
      * @pre dir holds either model.safetensors or model.safetensors.index.json
      *      with the shards it names.
-     * @note Any io or parse failure exits via RUNTHERDER_CHECK. No error
-     *       return, no exception.
+     * @note Fails accordingly on any io or parse error.
      */
     [[nodiscard]] static ShardedSafetensors open(const std::filesystem::path& dir);
 

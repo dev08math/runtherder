@@ -116,7 +116,11 @@ LlamaWeights::LlamaWeights(device::DeviceUniquePtr<std::byte> arena,
       lm_head_(std::move(lm_head)),
       inv_freq_(std::move(inv_freq)) {}
 
+    // Builds the head_dim / 2 entry inverse frequency table for plain RoPE.
+    // Entry i is theta_base^(-2i / head_dim), evaluated in double and narrowed
+    // to float, not float powf.
 std::vector<float> rope_inv_freq_plain(std::size_t head_dim, float theta_base) {
+
     RUNTHERDER_CHECK(head_dim >= 2,     "head_dim must be >= 2");
     RUNTHERDER_CHECK(head_dim % 2 == 0, "head_dim must be even");
     RUNTHERDER_CHECK(theta_base > 0.0f, "theta_base must be > 0");

@@ -13,17 +13,13 @@ enum class ModelType {
 
 /**
  * @brief Universal hyperparameters every LLM carries. Family specific
- *        extensions (heads, MLP, RoPE, MoE experts, SSM state) live in
- *        their family's own config under supported/.
- * @note Only constructable via load(), which validates the parsed fields
- *       before the instance is returned.
+ *        extensions live in their family's own config under supported/.
  */
 class Config {
 public:
     /**
      * @brief Parses the universal portion of config.json under model_dir.
-     * @note Bails via RUNTHERDER_CHECK on missing file, malformed JSON,
-     *       missing required fields, or unknown architecture string.
+     * @note Validates the parsed fields, and fails accordingly on a malformed config.
      */
     [[nodiscard]] static Config load(const std::filesystem::path& model_dir);
 
