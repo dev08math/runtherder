@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include <runtherder/attention/adaptive.h>
 #include <runtherder/attention/naive.h>
 #include <runtherder/check.h>
 
@@ -13,6 +14,8 @@ std::unique_ptr<AttentionBackend> make_attention_backend(
     switch (kind) {
         case BackendKind::Naive:
             return std::make_unique<NaiveAttention>(config);
+        case BackendKind::Adaptive:
+            return std::make_unique<AdaptiveAttention>(config);
     }
     RUNTHERDER_CHECK(false, "unknown attention BackendKind");
 }

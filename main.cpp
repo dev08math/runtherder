@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
         1.0F / std::sqrt(static_cast<float>(head_dim)),
     };
     auto backend = runtherder::attention::make_attention_backend(
-        runtherder::attention::BackendKind::Naive, attn);
+        runtherder::attention::BackendKind::Adaptive, attn);
 
     eng::KVCache kv_cache(
         static_cast<int>(model.config().base().num_layers()),

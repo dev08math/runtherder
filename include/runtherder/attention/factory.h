@@ -8,6 +8,7 @@ namespace runtherder::attention {
 
 enum class BackendKind {
     Naive,
+    Adaptive,
 };
 
 [[nodiscard]] std::unique_ptr<AttentionBackend> make_attention_backend(

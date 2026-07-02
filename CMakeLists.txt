@@ -39,6 +39,7 @@ add_library(runtherder_kernels STATIC
     src/kernels/matmul.cu
     src/kernels/embedding.cu
     src/kernels/attention.cu
+    src/kernels/flash_decode.cu
     src/kernels/quantization.cu
 )
 set_target_properties(runtherder_kernels PROPERTIES
@@ -50,6 +51,7 @@ target_link_libraries(runtherder_kernels PUBLIC runtherder_headers CUDA::cublasL
 
 add_library(runtherder_attention STATIC
     src/attention/naive.cu
+    src/attention/adaptive.cu
     src/attention/factory.cu
 )
 set_target_properties(runtherder_attention PROPERTIES
