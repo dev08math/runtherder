@@ -5,16 +5,19 @@
 
 #include <runtherder/attention/backend.h>
 #include <runtherder/attention/naive.h>
+#include <runtherder/device/memory.cuh>
 
 namespace runtherder::attention {
 
 /**
- * @brief Selects the attention kernel per request. n_new == 1 takes the flash
- *        decode kernel, prefill (n_new > 1) delegates to NaiveAttention.
+ * @brief Selects the attention kernel per request. Prefill (n_new > 1) delegates
+ *        to NaiveAttention. Decode (n_new == 1) takes the single block flash
+ *        kernel for a shallow cache, or the split kernel once the cache is deep
+ *        enough that one block per head underfills the GPU.
  */
 class AdaptiveAttention final : public AttentionBackend {
 public:
-    explicit AdaptiveAttention(const AttnConfig& config) noexcept;
+    explicit AdaptiveAttention(const AttnConfig& config);
 
     void run(__nv_bfloat16*       out,
              const __nv_bfloat16* q,
@@ -24,8 +27,9 @@ public:
              cudaStream_t         stream) override;
 
 private:
-    AttnConfig     config_;
-    NaiveAttention prefill_;
+    AttnConfig                     config_;
+    NaiveAttention                 prefill_;
+    device::DeviceUniquePtr<float> partial_;  // split decode reduction scratch
 };
 
 }  // namespace runtherder::attention
