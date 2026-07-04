@@ -37,13 +37,14 @@ void AdaptiveAttention::run(
             std::min(kMaxSplits, std::max(1, (n_keys + kMinChunkKeys - 1) / kMinChunkKeys));
         if (splits > 1) {
             kernels::flash_decode_split_bf16(
-                out, q, kv.k, kv.v, partial_.get(), splits, cache_len,
-                config_.num_q_heads, config_.num_kv_heads, config_.head_dim,
-                config_.scale, stream);
+                out, q, kv.k, kv.v, kv.k_scale, kv.v_scale, partial_.get(),
+                splits, cache_len, config_.num_q_heads, config_.num_kv_heads,
+                config_.head_dim, config_.scale, stream);
         } else {
             kernels::flash_decode_bf16(
-                out, q, kv.k, kv.v, cache_len, config_.num_q_heads,
-                config_.num_kv_heads, config_.head_dim, config_.scale, stream);
+                out, q, kv.k, kv.v, kv.k_scale, kv.v_scale, cache_len,
+                config_.num_q_heads, config_.num_kv_heads, config_.head_dim,
+                config_.scale, stream);
         }
         return;
     }

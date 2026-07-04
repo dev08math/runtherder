@@ -3,27 +3,34 @@
 #include <cstddef>
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 
 #include <runtherder/attention/kv_view.h>
 #include <runtherder/check.h>
 #include <runtherder/device/check.cuh>
 #include <runtherder/device/memory.cuh>
+#include <runtherder/kernels/quantization.cuh>
 
 namespace runtherder::engine {
 
 /**
- * @brief Single sequence contiguous KV cache. K and V slabs laid out
- *        [num_layers, max_seq_len, num_kv_heads, head_dim]. Caller owns the
- *        write position.
+ * @brief Single sequence contiguous KV cache stored as E4M3. K and V slabs are
+ *        [num_layers, max_seq_len, num_kv_heads, head_dim]. The parallel scale
+ *        slabs are [num_layers, max_seq_len, num_kv_heads], one dequant scale per
+ *        (token, kv_head). append takes bf16 and quantizes on the way in, so the
+ *        fp8 format never leaves the cache. Caller owns the write position.
  */
 class KVCache {
 public:
     KVCache(int num_layers, int max_seq_len, int num_kv_heads, int head_dim)
         : num_layers_(num_layers),
           max_seq_len_(max_seq_len),
+          num_kv_heads_(num_kv_heads),
+          head_dim_(head_dim),
           kv_dim_(num_kv_heads * head_dim),
-          layer_stride_(max_seq_len * (num_kv_heads * head_dim)) {
+          layer_stride_(max_seq_len * (num_kv_heads * head_dim)),
+          scale_layer_stride_(max_seq_len * num_kv_heads) {
         RUNTHERDER_CHECK(num_layers >= 1,   "KVCache num_layers must be >= 1");
         RUNTHERDER_CHECK(max_seq_len >= 1,  "KVCache max_seq_len must be >= 1");
         RUNTHERDER_CHECK(num_kv_heads >= 1, "KVCache num_kv_heads must be >= 1");
@@ -31,8 +38,12 @@ public:
 
         const std::size_t total = static_cast<std::size_t>(num_layers_) *
                                   static_cast<std::size_t>(layer_stride_);
-        k_ = device::make_device_unique<__nv_bfloat16>(total);
-        v_ = device::make_device_unique<__nv_bfloat16>(total);
+        const std::size_t scale_total = static_cast<std::size_t>(num_layers_) *
+                                        static_cast<std::size_t>(scale_layer_stride_);
+        k_ = device::make_device_unique<__nv_fp8_e4m3>(total);
+        v_ = device::make_device_unique<__nv_fp8_e4m3>(total);
+        k_scale_ = device::make_device_unique<float>(scale_total);
+        v_scale_ = device::make_device_unique<float>(scale_total);
     }
 
     KVCache(KVCache&&) noexcept            = default;
@@ -41,9 +52,9 @@ public:
     KVCache& operator=(const KVCache&)     = delete;
 
     /**
-     * @brief Copies n_new keys and values into layer at row at_pos.
-     * @param k       [n_new, num_kv_heads, head_dim]
-     * @param v       [n_new, num_kv_heads, head_dim]
+     * @brief Quantizes n_new bf16 keys and values into layer at row at_pos.
+     * @param k       [n_new, num_kv_heads, head_dim] bf16
+     * @param v       [n_new, num_kv_heads, head_dim] bf16
      * @param at_pos  row offset to write at, the caller owned write position
      */
     void append(int layer, const __nv_bfloat16* k, const __nv_bfloat16* v,
@@ -55,13 +66,14 @@ public:
 
         const std::size_t dst = static_cast<std::size_t>(layer) * static_cast<std::size_t>(layer_stride_) +
                                 static_cast<std::size_t>(at_pos) * static_cast<std::size_t>(kv_dim_);
-        const std::size_t bytes =
-            static_cast<std::size_t>(n_new) * static_cast<std::size_t>(kv_dim_) * sizeof(__nv_bfloat16);
+        const std::size_t sdst = static_cast<std::size_t>(layer) * static_cast<std::size_t>(scale_layer_stride_) +
+                                 static_cast<std::size_t>(at_pos) * static_cast<std::size_t>(num_kv_heads_);
+        const int num_rows = n_new * num_kv_heads_;
 
-        RUNTHERDER_CUDA_CHECK(cudaMemcpyAsync(k_.get() + dst, k, bytes,
-                                              cudaMemcpyDeviceToDevice, stream));
-        RUNTHERDER_CUDA_CHECK(cudaMemcpyAsync(v_.get() + dst, v, bytes,
-                                              cudaMemcpyDeviceToDevice, stream));
+        kernels::quantize_kv_fp8(k_.get() + dst, k_scale_.get() + sdst, k,
+                                 num_rows, head_dim_, stream);
+        kernels::quantize_kv_fp8(v_.get() + dst, v_scale_.get() + sdst, v,
+                                 num_rows, head_dim_, stream);
     }
 
     [[nodiscard]] attention::KVView view(int layer, int len) const {
@@ -70,18 +82,26 @@ public:
 
         const std::size_t base = static_cast<std::size_t>(layer) *
                                  static_cast<std::size_t>(layer_stride_);
-        return attention::KVView{k_.get() + base, v_.get() + base, len};
+        const std::size_t sbase = static_cast<std::size_t>(layer) *
+                                  static_cast<std::size_t>(scale_layer_stride_);
+        return attention::KVView{k_.get() + base, v_.get() + base,
+                                 k_scale_.get() + sbase, v_scale_.get() + sbase, len};
     }
 
     [[nodiscard]] int max_seq_len() const noexcept { return max_seq_len_; }
 
 private:
-    device::DeviceUniquePtr<__nv_bfloat16> k_;
-    device::DeviceUniquePtr<__nv_bfloat16> v_;
+    device::DeviceUniquePtr<__nv_fp8_e4m3> k_;
+    device::DeviceUniquePtr<__nv_fp8_e4m3> v_;
+    device::DeviceUniquePtr<float>         k_scale_;
+    device::DeviceUniquePtr<float>         v_scale_;
     int num_layers_;
     int max_seq_len_;
-    int kv_dim_;        // num_kv_heads * head_dim
-    int layer_stride_;  // max_seq_len * kv_dim
+    int num_kv_heads_;
+    int head_dim_;
+    int kv_dim_;              // num_kv_heads * head_dim
+    int layer_stride_;        // max_seq_len * kv_dim
+    int scale_layer_stride_;  // max_seq_len * num_kv_heads
 };
 
 }  // namespace runtherder::engine

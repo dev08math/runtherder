@@ -1,6 +1,7 @@
 #include <runtherder/kernels/quantization.cuh>
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 
 #include <runtherder/check.h>
@@ -187,6 +188,112 @@ void dequantize_w8a8(__nv_bfloat16*       y,
     dequantize_w8a8_kernel<<<grid, kBlockSize, 0, stream>>>(
         y, acc, x_scale, w_scale, m, n);
     RUNTHERDER_CUDA_CHECK_LAST();
+}
+
+namespace {
+
+constexpr float kFp8E4M3Max = 448.0f;
+
+template <int VecsPerThread>
+__global__ void quantize_kv_fp8_kernel(
+    __nv_fp8_e4m3* __restrict__       q,
+    float* __restrict__               scale,
+    const __nv_bfloat16* __restrict__ x,
+    int                               dim) {
+    const int row    = blockIdx.x;
+    const int tid    = threadIdx.x;
+    const int n_vecs = dim / kVecWidth;
+
+    const __nv_bfloat16* x_row = x + row * dim;
+
+    float cache[VecsPerThread * kVecWidth];
+    float local_absmax = 0.0f;
+
+    int slot = 0;
+    for (int i = tid; i < n_vecs; i += blockDim.x) {
+        float4               xv = reinterpret_cast<const float4*>(x_row)[i];
+        const __nv_bfloat16* xh = reinterpret_cast<const __nv_bfloat16*>(&xv);
+        #pragma unroll
+        for (int j = 0; j < kVecWidth; ++j) {
+            const float v               = __bfloat162float(xh[j]);
+            cache[slot * kVecWidth + j] = v;
+            local_absmax                = fmaxf(local_absmax, fabsf(v));
+        }
+        ++slot;
+    }
+
+    __shared__ float s_partial[8];
+    const float absmax = block_reduce_max(local_absmax, s_partial);
+
+    __shared__ float row_inv_scale;
+    if (tid == 0) {
+        scale[row]    = absmax / kFp8E4M3Max;
+        row_inv_scale = (absmax > 0.0f) ? (kFp8E4M3Max / absmax) : 0.0f;
+    }
+    __syncthreads();
+
+    const float    inv_scale = row_inv_scale;
+    __nv_fp8_e4m3* q_row     = q + row * dim;
+
+    slot = 0;
+    for (int i = tid; i < n_vecs; i += blockDim.x) {
+        #pragma unroll
+        for (int j = 0; j < kVecWidth; ++j) {
+            // E4M3 ctor saturates out of range, no explicit clamp like int8.
+            q_row[i * kVecWidth + j] =
+                __nv_fp8_e4m3(cache[slot * kVecWidth + j] * inv_scale);
+        }
+        ++slot;
+    }
+}
+
+template <int VecsPerThread>
+inline void launch_kv_fp8(__nv_fp8_e4m3*       q,
+                          float*               scale,
+                          const __nv_bfloat16* x,
+                          int                  num_rows,
+                          int                  dim,
+                          cudaStream_t         stream) {
+    quantize_kv_fp8_kernel<VecsPerThread>
+        <<<num_rows, kBlockSize, 0, stream>>>(q, scale, x, dim);
+    RUNTHERDER_CUDA_CHECK_LAST();
+}
+
+}  // namespace
+
+void quantize_kv_fp8(__nv_fp8_e4m3*       q,
+                     float*               scale,
+                     const __nv_bfloat16* x,
+                     int                  num_rows,
+                     int                  head_dim,
+                     cudaStream_t         stream) {
+    RUNTHERDER_CHECK(num_rows >= 1, "num_rows must be >= 1");
+    RUNTHERDER_CHECK(head_dim >= kVecWidth, "head_dim must be >= 8");
+    RUNTHERDER_CHECK(head_dim % kVecWidth == 0, "head_dim must be divisible by 8");
+
+    const int n_vecs          = head_dim / kVecWidth;
+    const int vecs_per_thread = (n_vecs + kBlockSize - 1) / kBlockSize;
+
+    switch (vecs_per_thread) {
+        case 1:
+            launch_kv_fp8<1>(q, scale, x, num_rows, head_dim, stream);
+            break;
+        case 2:
+            launch_kv_fp8<2>(q, scale, x, num_rows, head_dim, stream);
+            break;
+        case 3:
+        case 4:
+            launch_kv_fp8<4>(q, scale, x, num_rows, head_dim, stream);
+            break;
+        case 5:
+        case 6:
+        case 7:
+        case 8:
+            launch_kv_fp8<8>(q, scale, x, num_rows, head_dim, stream);
+            break;
+        default:
+            RUNTHERDER_CHECK(false, "head_dim too large for current dispatch");
+    }
 }
 
 }  // namespace runtherder::kernels

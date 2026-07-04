@@ -1,10 +1,12 @@
 #include <runtherder/kernels/flash_decode.cuh>
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <math_constants.h>
 
 #include <runtherder/device/check.cuh>
+#include <runtherder/kernels/quantization.cuh>
 
 namespace runtherder::kernels {
 
@@ -13,12 +15,15 @@ namespace {
 constexpr int kMaxHeadDim = 1024;
 
 // One block per q head, one thread per head_dim lane. Online softmax, the q.k
-// dot is a shared memory reduction across the block on every key.
+// dot is a shared memory reduction across the block on every key. K and V are
+// E4M3, dequantized by their per (token, kv_head) scale at the load site.
 __global__ void flash_decode_bf16_kernel(
     __nv_bfloat16* __restrict__       out,
     const __nv_bfloat16* __restrict__ q,
-    const __nv_bfloat16* __restrict__ k,
-    const __nv_bfloat16* __restrict__ v,
+    const __nv_fp8_e4m3* __restrict__ k,
+    const __nv_fp8_e4m3* __restrict__ v,
+    const float* __restrict__         k_scale,
+    const float* __restrict__         v_scale,
     int                               cache_len,
     int                               num_q_heads,
     int                               num_kv_heads,
@@ -38,12 +43,13 @@ __global__ void flash_decode_bf16_kernel(
     float l   = 0.0f;
 
     for (int j = 0; j < n_keys; ++j) {
-        const __nv_bfloat16* k_row =
-            k + (static_cast<long long>(j) * num_kv_heads + kvh) * head_dim;
-        const __nv_bfloat16* v_row =
-            v + (static_cast<long long>(j) * num_kv_heads + kvh) * head_dim;
+        const long long          row   = static_cast<long long>(j) * num_kv_heads + kvh;
+        const __nv_fp8_e4m3*      k_row = k + row * head_dim;
+        const __nv_fp8_e4m3*      v_row = v + row * head_dim;
+        const float               ks    = k_scale[row];
+        const float               vs    = v_scale[row];
 
-        red[d] = q_d * __bfloat162float(k_row[d]);
+        red[d] = q_d * dequantize_kv_fp8(k_row[d], ks);
         __syncthreads();
         for (int stride = head_dim / 2; stride > 0; stride >>= 1) {
             if (d < stride) {
@@ -58,7 +64,7 @@ __global__ void flash_decode_bf16_kernel(
         const float corr  = __expf(m - m_new);
         const float w     = __expf(s - m_new);
         l   = l * corr + w;
-        acc = acc * corr + w * __bfloat162float(v_row[d]);
+        acc = acc * corr + w * dequantize_kv_fp8(v_row[d], vs);
         m   = m_new;
     }
 
@@ -71,8 +77,10 @@ __global__ void flash_decode_bf16_kernel(
 // sentinel the reduce treats as a zero weight contribution.
 __global__ void flash_decode_partial_kernel(
     const __nv_bfloat16* __restrict__ q,
-    const __nv_bfloat16* __restrict__ k,
-    const __nv_bfloat16* __restrict__ v,
+    const __nv_fp8_e4m3* __restrict__ k,
+    const __nv_fp8_e4m3* __restrict__ v,
+    const float* __restrict__         k_scale,
+    const float* __restrict__         v_scale,
     float* __restrict__               partial,
     int                               num_splits,
     int                               cache_len,
@@ -99,12 +107,13 @@ __global__ void flash_decode_partial_kernel(
     float l   = 0.0f;
 
     for (int j = start; j < end; ++j) {
-        const __nv_bfloat16* k_row =
-            k + (static_cast<long long>(j) * num_kv_heads + kvh) * head_dim;
-        const __nv_bfloat16* v_row =
-            v + (static_cast<long long>(j) * num_kv_heads + kvh) * head_dim;
+        const long long          row   = static_cast<long long>(j) * num_kv_heads + kvh;
+        const __nv_fp8_e4m3*      k_row = k + row * head_dim;
+        const __nv_fp8_e4m3*      v_row = v + row * head_dim;
+        const float               ks    = k_scale[row];
+        const float               vs    = v_scale[row];
 
-        red[d] = q_d * __bfloat162float(k_row[d]);
+        red[d] = q_d * dequantize_kv_fp8(k_row[d], ks);
         __syncthreads();
         for (int stride = head_dim / 2; stride > 0; stride >>= 1) {
             if (d < stride) {
@@ -119,7 +128,7 @@ __global__ void flash_decode_partial_kernel(
         const float corr  = __expf(m - m_new);
         const float w     = __expf(s - m_new);
         l   = l * corr + w;
-        acc = acc * corr + w * __bfloat162float(v_row[d]);
+        acc = acc * corr + w * dequantize_kv_fp8(v_row[d], vs);
         m   = m_new;
     }
 
@@ -166,8 +175,10 @@ __global__ void flash_decode_reduce_kernel(
 void flash_decode_bf16(
     __nv_bfloat16*       out,
     const __nv_bfloat16* q,
-    const __nv_bfloat16* k,
-    const __nv_bfloat16* v,
+    const __nv_fp8_e4m3* k,
+    const __nv_fp8_e4m3* v,
+    const float*         k_scale,
+    const float*         v_scale,
     int                  cache_len,
     int                  num_q_heads,
     int                  num_kv_heads,
@@ -187,15 +198,18 @@ void flash_decode_bf16(
     const int          block = head_dim;
     const std::size_t  shmem = static_cast<std::size_t>(head_dim) * sizeof(float);
     flash_decode_bf16_kernel<<<num_q_heads, block, shmem, stream>>>(
-        out, q, k, v, cache_len, num_q_heads, num_kv_heads, head_dim, scale);
+        out, q, k, v, k_scale, v_scale, cache_len, num_q_heads, num_kv_heads,
+        head_dim, scale);
     RUNTHERDER_CUDA_CHECK_LAST();
 }
 
 void flash_decode_split_bf16(
     __nv_bfloat16*       out,
     const __nv_bfloat16* q,
-    const __nv_bfloat16* k,
-    const __nv_bfloat16* v,
+    const __nv_fp8_e4m3* k,
+    const __nv_fp8_e4m3* v,
+    const float*         k_scale,
+    const float*         v_scale,
     float*               partial,
     int                  num_splits,
     int                  cache_len,
@@ -221,8 +235,8 @@ void flash_decode_split_bf16(
     const dim3 partial_grid(static_cast<unsigned int>(num_q_heads),
                             static_cast<unsigned int>(num_splits));
     flash_decode_partial_kernel<<<partial_grid, block, shmem, stream>>>(
-        q, k, v, partial, num_splits, cache_len, num_q_heads, num_kv_heads,
-        head_dim, scale);
+        q, k, v, k_scale, v_scale, partial, num_splits, cache_len, num_q_heads,
+        num_kv_heads, head_dim, scale);
     RUNTHERDER_CUDA_CHECK_LAST();
 
     flash_decode_reduce_kernel<<<num_q_heads, block, 0, stream>>>(

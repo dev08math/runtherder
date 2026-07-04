@@ -57,3 +57,27 @@ target_link_libraries(test_attention PRIVATE
     GTest::gtest_main
 )
 gtest_discover_tests(test_attention)
+
+add_executable(test_quantization test_quantization.cpp)
+set_target_properties(test_quantization PROPERTIES
+    LANGUAGE CUDA
+)
+set_source_files_properties(test_quantization.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(test_quantization PRIVATE
+    runtherder_headers
+    runtherder_kernels
+    GTest::gtest_main
+)
+gtest_discover_tests(test_quantization)
+
+add_executable(test_flash_decode test_flash_decode.cpp)
+set_target_properties(test_flash_decode PROPERTIES
+    LANGUAGE CUDA
+)
+set_source_files_properties(test_flash_decode.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(test_flash_decode PRIVATE
+    runtherder_headers
+    runtherder_kernels
+    GTest::gtest_main
+)
+gtest_discover_tests(test_flash_decode)

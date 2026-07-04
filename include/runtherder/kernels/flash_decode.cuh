@@ -3,24 +3,29 @@
 #include <cstddef>
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 
 namespace runtherder::kernels {
 
 /**
- * @brief Causal attention for a single query token against a cache.
- * @param out        [num_q_heads, head_dim]
- * @param q          [num_q_heads, head_dim]
- * @param k          [cache_len + 1, num_kv_heads, head_dim]
- * @param v          [cache_len + 1, num_kv_heads, head_dim]
+ * @brief Causal attention for a single query token against an E4M3 KV cache.
+ * @param out        [num_q_heads, head_dim] bf16
+ * @param q          [num_q_heads, head_dim] bf16
+ * @param k          [cache_len + 1, num_kv_heads, head_dim] E4M3
+ * @param v          [cache_len + 1, num_kv_heads, head_dim] E4M3
+ * @param k_scale    [cache_len + 1, num_kv_heads] per (token, kv_head) dequant
+ * @param v_scale    [cache_len + 1, num_kv_heads] per (token, kv_head) dequant
  * @param cache_len  keys cached before this query. Attends cache_len + 1 keys.
  * @note head_dim maps to block threads, capped at the launch site.
  */
 void flash_decode_bf16(
     __nv_bfloat16*       out,
     const __nv_bfloat16* q,
-    const __nv_bfloat16* k,
-    const __nv_bfloat16* v,
+    const __nv_fp8_e4m3* k,
+    const __nv_fp8_e4m3* v,
+    const float*         k_scale,
+    const float*         v_scale,
     int                  cache_len,
     int                  num_q_heads,
     int                  num_kv_heads,
@@ -46,10 +51,12 @@ void flash_decode_bf16(
 /**
  * @brief Split KV flash decode: a partial kernel over num_splits chunks of the
  *        key history, then a reduce that merges the partial softmaxes.
- * @param out         [num_q_heads, head_dim]
- * @param q           [num_q_heads, head_dim]
- * @param k           [cache_len + 1, num_kv_heads, head_dim]
- * @param v           [cache_len + 1, num_kv_heads, head_dim]
+ * @param out         [num_q_heads, head_dim] bf16
+ * @param q           [num_q_heads, head_dim] bf16
+ * @param k           [cache_len + 1, num_kv_heads, head_dim] E4M3
+ * @param v           [cache_len + 1, num_kv_heads, head_dim] E4M3
+ * @param k_scale     [cache_len + 1, num_kv_heads] per (token, kv_head) dequant
+ * @param v_scale     [cache_len + 1, num_kv_heads] per (token, kv_head) dequant
  * @param partial     caller owned scratch, at least
  *                    flash_split_scratch_floats(num_q_heads, head_dim, num_splits)
  *                    floats. Carved into m, l, acc by the launcher.
@@ -62,8 +69,10 @@ void flash_decode_bf16(
 void flash_decode_split_bf16(
     __nv_bfloat16*       out,
     const __nv_bfloat16* q,
-    const __nv_bfloat16* k,
-    const __nv_bfloat16* v,
+    const __nv_fp8_e4m3* k,
+    const __nv_fp8_e4m3* v,
+    const float*         k_scale,
+    const float*         v_scale,
     float*               partial,
     int                  num_splits,
     int                  cache_len,

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 
 #include <cmath>
@@ -9,12 +10,50 @@
 #include <vector>
 
 #include <runtherder/kernels/attention.cuh>
+#include <runtherder/kernels/quantization.cuh>
 #include "device_buffer.cuh"
 #include <runtherder/device/check.cuh>
 
 namespace {
 
 using runtherder::device::DeviceBuffer;
+
+// A bf16 KV tensor quantized to the cache's E4M3 format. Holds the device fp8
+// values and their per (token, kv_head) scales for the kernel, plus the host
+// dequantized values so the reference sees exactly what the kernel reads.
+struct QuantizedKV {
+    DeviceBuffer<__nv_fp8_e4m3> q;
+    DeviceBuffer<float>         scale;
+    std::vector<__nv_bfloat16>  deq;
+};
+
+QuantizedKV quantize_kv(const std::vector<__nv_bfloat16>& x,
+                        int num_rows, int head_dim) {
+    QuantizedKV out;
+    out.q     = DeviceBuffer<__nv_fp8_e4m3>(x.size());
+    out.scale = DeviceBuffer<float>(static_cast<std::size_t>(num_rows));
+
+    DeviceBuffer<__nv_bfloat16> x_dev(x.size());
+    x_dev.copy_from_host(x.data());
+    runtherder::kernels::quantize_kv_fp8(
+        out.q.data(), out.scale.data(), x_dev.data(), num_rows, head_dim, nullptr);
+    RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
+
+    std::vector<__nv_fp8_e4m3> q_host(x.size());
+    std::vector<float>         s_host(static_cast<std::size_t>(num_rows));
+    out.q.copy_to_host(q_host.data());
+    out.scale.copy_to_host(s_host.data());
+
+    out.deq.resize(x.size());
+    for (int row = 0; row < num_rows; ++row) {
+        for (int d = 0; d < head_dim; ++d) {
+            const std::size_t i = static_cast<std::size_t>(row) * head_dim + d;
+            out.deq[i] = __float2bfloat16(
+                runtherder::kernels::dequantize_kv_fp8(q_host[i], s_host[row]));
+        }
+    }
+    return out;
+}
 
 std::vector<__nv_bfloat16> make_bf16_random(std::size_t   count,
                                             float         scale,
@@ -128,8 +167,10 @@ CompareResult compare_bf16(const std::vector<__nv_bfloat16>& a,
     return {max_abs, cos};
 }
 
-constexpr float kAbsTol   = 5e-2f;
-constexpr float kCosFloor = 0.9999f;
+// Reference is built from the same fp8 values the kernel dequantizes, so the
+// residual is only the bf16 rounding of those dequantized values.
+constexpr float kAbsTol   = 8e-2f;
+constexpr float kCosFloor = 0.999f;
 
 void run_case(int num_tokens,
               int num_q_heads,
@@ -146,20 +187,21 @@ void run_case(int num_tokens,
     auto k_host = make_bf16_random(kv_count, 1.0f, 0xB0Bu);
     auto v_host = make_bf16_random(kv_count, 1.0f, 0xCAFEu);
 
+    const int         kv_rows = num_tokens * num_kv_heads;
+    const QuantizedKV k = quantize_kv(k_host, kv_rows, head_dim);
+    const QuantizedKV v = quantize_kv(v_host, kv_rows, head_dim);
+
     auto expected = attention_cpu_reference(
-        q_host, k_host, v_host,
+        q_host, k.deq, v.deq,
         num_tokens, num_q_heads, num_kv_heads, head_dim, scale);
 
     DeviceBuffer<__nv_bfloat16> q_dev(q_count);
-    DeviceBuffer<__nv_bfloat16> k_dev(kv_count);
-    DeviceBuffer<__nv_bfloat16> v_dev(kv_count);
     DeviceBuffer<__nv_bfloat16> out_dev(q_count);
     q_dev.copy_from_host(q_host.data());
-    k_dev.copy_from_host(k_host.data());
-    v_dev.copy_from_host(v_host.data());
 
     runtherder::kernels::attention_causal_bf16(
-        out_dev.data(), q_dev.data(), k_dev.data(), v_dev.data(),
+        out_dev.data(), q_dev.data(), k.q.data(), v.q.data(),
+        k.scale.data(), v.scale.data(),
         num_tokens, /*cache_len=*/0, num_q_heads, num_kv_heads, head_dim, scale, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -193,8 +235,12 @@ void run_decode_case(int cache_len,
     auto k_host = make_bf16_random(kv_full, 1.0f, 0xB0Bu);
     auto v_host = make_bf16_random(kv_full, 1.0f, 0xCAFEu);
 
+    const int         kv_rows = total * num_kv_heads;
+    const QuantizedKV k = quantize_kv(k_host, kv_rows, head_dim);
+    const QuantizedKV v = quantize_kv(v_host, kv_rows, head_dim);
+
     auto expected_full = attention_cpu_reference(
-        q_host, k_host, v_host,
+        q_host, k.deq, v.deq,
         total, num_q_heads, num_kv_heads, head_dim, scale);
 
     const std::size_t q_new =
@@ -203,15 +249,12 @@ void run_decode_case(int cache_len,
         static_cast<std::size_t>(cache_len) * num_q_heads * head_dim;
 
     DeviceBuffer<__nv_bfloat16> q_dev(q_new);
-    DeviceBuffer<__nv_bfloat16> k_dev(kv_full);
-    DeviceBuffer<__nv_bfloat16> v_dev(kv_full);
     DeviceBuffer<__nv_bfloat16> out_dev(q_new);
     q_dev.copy_from_host(q_host.data() + q_off);
-    k_dev.copy_from_host(k_host.data());
-    v_dev.copy_from_host(v_host.data());
 
     runtherder::kernels::attention_causal_bf16(
-        out_dev.data(), q_dev.data(), k_dev.data(), v_dev.data(),
+        out_dev.data(), q_dev.data(), k.q.data(), v.q.data(),
+        k.scale.data(), v.scale.data(),
         n_new, cache_len, num_q_heads, num_kv_heads, head_dim, scale, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
 

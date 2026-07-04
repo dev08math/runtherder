@@ -1,10 +1,12 @@
 #include <runtherder/kernels/attention.cuh>
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <math_constants.h>
 
 #include <runtherder/device/check.cuh>
+#include <runtherder/kernels/quantization.cuh>
 
 namespace runtherder::kernels {
 
@@ -15,24 +17,27 @@ constexpr int kMaxHeadDim = 256;
 
 __device__ float qk_dot(
     const __nv_bfloat16* q_row,
-    const __nv_bfloat16* k_row,
+    const __nv_fp8_e4m3* k_row,
+    float                k_scale,
     int                  head_dim) {
     float s = 0.0f;
     for (int d = 0; d < head_dim; ++d) {
-        s += __bfloat162float(q_row[d]) * __bfloat162float(k_row[d]);
+        s += __bfloat162float(q_row[d]) * dequantize_kv_fp8(k_row[d], k_scale);
     }
     return s;
 }
 
 // One thread owns one output row out[token, head, :]. Serial over keys, two
 // passes (max, then exp weighted sum), recomputing the q.k dot each pass to
-// avoid storing a score row. Readable reference, replaced by a flash style
-// kernel later.
+// avoid storing a score row. K and V are E4M3, dequantized by their per
+// (token, kv_head) scale. Readable reference and the prefill path.
 __global__ void attention_causal_bf16_kernel(
     __nv_bfloat16* __restrict__       out,
     const __nv_bfloat16* __restrict__ q,
-    const __nv_bfloat16* __restrict__ k,
-    const __nv_bfloat16* __restrict__ v,
+    const __nv_fp8_e4m3* __restrict__ k,
+    const __nv_fp8_e4m3* __restrict__ v,
+    const float* __restrict__         k_scale,
+    const float* __restrict__         v_scale,
     int                               n_new,
     int                               cache_len,
     int                               num_q_heads,
@@ -54,9 +59,9 @@ __global__ void attention_causal_bf16_kernel(
 
     float m = -CUDART_INF_F;
     for (int j = 0; j < n_keys; ++j) {
-        const __nv_bfloat16* k_row =
-            k + (static_cast<long long>(j) * num_kv_heads + kvh) * head_dim;
-        m = fmaxf(m, qk_dot(q_row, k_row, head_dim) * scale);
+        const long long      row   = static_cast<long long>(j) * num_kv_heads + kvh;
+        const __nv_fp8_e4m3* k_row = k + row * head_dim;
+        m = fmaxf(m, qk_dot(q_row, k_row, k_scale[row], head_dim) * scale);
     }
 
     float acc[kMaxHeadDim];
@@ -66,15 +71,15 @@ __global__ void attention_causal_bf16_kernel(
 
     float denom = 0.0f;
     for (int j = 0; j < n_keys; ++j) {
-        const __nv_bfloat16* k_row =
-            k + (static_cast<long long>(j) * num_kv_heads + kvh) * head_dim;
-        const __nv_bfloat16* v_row =
-            v + (static_cast<long long>(j) * num_kv_heads + kvh) * head_dim;
+        const long long      row   = static_cast<long long>(j) * num_kv_heads + kvh;
+        const __nv_fp8_e4m3* k_row = k + row * head_dim;
+        const __nv_fp8_e4m3* v_row = v + row * head_dim;
+        const float          vs    = v_scale[row];
 
-        const float w = __expf(qk_dot(q_row, k_row, head_dim) * scale - m);
+        const float w = __expf(qk_dot(q_row, k_row, k_scale[row], head_dim) * scale - m);
         denom += w;
         for (int d = 0; d < head_dim; ++d) {
-            acc[d] += w * __bfloat162float(v_row[d]);
+            acc[d] += w * dequantize_kv_fp8(v_row[d], vs);
         }
     }
 
@@ -90,8 +95,10 @@ __global__ void attention_causal_bf16_kernel(
 void attention_causal_bf16(
     __nv_bfloat16*       out,
     const __nv_bfloat16* q,
-    const __nv_bfloat16* k,
-    const __nv_bfloat16* v,
+    const __nv_fp8_e4m3* k,
+    const __nv_fp8_e4m3* v,
+    const float*         k_scale,
+    const float*         v_scale,
     int                  n_new,
     int                  cache_len,
     int                  num_q_heads,
@@ -112,7 +119,8 @@ void attention_causal_bf16(
     const int block = 128;
     const int grid  = (total + block - 1) / block;
     attention_causal_bf16_kernel<<<grid, block, 0, stream>>>(
-        out, q, k, v, n_new, cache_len, num_q_heads, num_kv_heads, head_dim, scale);
+        out, q, k, v, k_scale, v_scale, n_new, cache_len, num_q_heads,
+        num_kv_heads, head_dim, scale);
     RUNTHERDER_CUDA_CHECK_LAST();
 }
 

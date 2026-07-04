@@ -15,7 +15,7 @@ void NaiveAttention::run(
     int                  cache_len,
     cudaStream_t         stream) {
     kernels::attention_causal_bf16(
-        out, q, kv.k, kv.v,
+        out, q, kv.k, kv.v, kv.k_scale, kv.v_scale,
         n_new,
         cache_len,
         config_.num_q_heads,

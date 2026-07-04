@@ -1,23 +1,28 @@
 #pragma once
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 
 namespace runtherder::kernels {
 
 /**
- * @brief Causal attention.
- * @param out  [n_new, num_q_heads, head_dim]
- * @param q    [n_new, num_q_heads, head_dim]
- * @param k    [cache_len + n_new, num_kv_heads, head_dim]
- * @param v    [cache_len + n_new, num_kv_heads, head_dim]
+ * @brief Causal attention over an E4M3 KV cache.
+ * @param out      [n_new, num_q_heads, head_dim] bf16
+ * @param q        [n_new, num_q_heads, head_dim] bf16
+ * @param k        [cache_len + n_new, num_kv_heads, head_dim] E4M3
+ * @param v        [cache_len + n_new, num_kv_heads, head_dim] E4M3
+ * @param k_scale  [cache_len + n_new, num_kv_heads] per (token, kv_head) dequant
+ * @param v_scale  [cache_len + n_new, num_kv_heads] per (token, kv_head) dequant
  * @note out distinct from k, v.
  */
 void attention_causal_bf16(
     __nv_bfloat16*       out,
     const __nv_bfloat16* q,
-    const __nv_bfloat16* k,
-    const __nv_bfloat16* v,
+    const __nv_fp8_e4m3* k,
+    const __nv_fp8_e4m3* v,
+    const float*         k_scale,
+    const float*         v_scale,
     int                  n_new,
     int                  cache_len,
     int                  num_q_heads,
