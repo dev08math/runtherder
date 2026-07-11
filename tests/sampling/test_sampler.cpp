@@ -1,14 +1,19 @@
 #include <runtherder/sampling/sampler.h>
 
+#include <cmath>
 #include <cstddef>
+#include <random>
 #include <vector>
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <runtherder/sampling/greedy.h>
+
 namespace {
 
+using runtherder::sampling::greedy_argmax;
 using runtherder::sampling::Sampler;
 using runtherder::sampling::SamplingParams;
 
@@ -51,6 +56,40 @@ TEST(Sampler, TopKOneCollapsesToArgmax) {
         EXPECT_EQ(sampler.sample(device, params), 1);
     }
     cudaFree(device);
+}
+
+TEST(Sampler, DeviceGreedyMatchesHostOracleFuzz) {
+    std::mt19937                          rng(2026);
+    std::uniform_real_distribution<float> dist(-50.0F, 50.0F);
+    const std::vector<int>                vocabs = {1, 2, 4, 127, 1000, 50000, 128256};
+
+    for (const int vocab : vocabs) {
+        for (int trial = 0; trial < 5; ++trial) {
+            std::vector<float> values(static_cast<std::size_t>(vocab));
+            for (float& x : values) {
+                x = dist(rng);
+            }
+            __nv_bfloat16* device = upload(values);
+
+            Sampler        sampler(vocab, 1234);
+            SamplingParams params;
+            params.temperature = 0.0F;
+            const int dev  = sampler.sample(device, params);
+            const int host = greedy_argmax(device, vocab);
+
+            // Compare in the bf16 domain both algorithms see. On ties the chosen
+            // index may differ, but both must land on a maximal value.
+            float maxv = -INFINITY;
+            for (const float x : values) {
+                maxv = std::max(maxv, static_cast<float>(__float2bfloat16(x)));
+            }
+            const float dev_v  = static_cast<float>(__float2bfloat16(values[dev]));
+            const float host_v = static_cast<float>(__float2bfloat16(values[host]));
+            EXPECT_EQ(dev_v, maxv) << "vocab=" << vocab << " trial=" << trial;
+            EXPECT_EQ(dev_v, host_v) << "vocab=" << vocab << " trial=" << trial;
+            cudaFree(device);
+        }
+    }
 }
 
 TEST(Sampler, SameSeedReproducesSequence) {

@@ -6,7 +6,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <tuple>
 #include <type_traits>
 
 #include <runtherder/device/memory.cuh>
@@ -79,15 +81,56 @@ private:
             }
         }
     };
-    // cublasLtHandle_t is itself a pointer. remove_pointer_t strips one level so
-    // unique_ptr owns a single handle, not a pointer to one.
     using LtHandle = std::unique_ptr<std::remove_pointer_t<cublasLtHandle_t>, LtDeleter>;
 
-    // Recommended minimum workspace size for cublasLtMatmulAlgo_t with BF16 inputs and FP32 accumulation is 32 MiB by NVIDIA
+    struct MatmulDescDeleter {
+        void operator()(cublasLtMatmulDesc_t desc) const noexcept {
+            if (desc != nullptr) {
+                cublasLtMatmulDescDestroy(desc);
+            }
+        }
+    };
+    struct MatrixLayoutDeleter {
+        void operator()(cublasLtMatrixLayout_t layout) const noexcept {
+            if (layout != nullptr) {
+                cublasLtMatrixLayoutDestroy(layout);
+            }
+        }
+    };
+
+    using DescPtr   = std::unique_ptr<std::remove_pointer_t<cublasLtMatmulDesc_t>, MatmulDescDeleter>;
+    using LayoutPtr = std::unique_ptr<std::remove_pointer_t<cublasLtMatrixLayout_t>, MatrixLayoutDeleter>;
+
+    // Per shape and dtype plan: the desc, layouts, and chosen algo.
+    struct GemmPlan {
+        DescPtr              desc;
+        LayoutPtr            layout_w;
+        LayoutPtr            layout_x;
+        LayoutPtr            layout_y;
+        cublasLtMatmulAlgo_t algo;
+    };
+
+    // (m, n, k) plus the full dtype signature (compute, scale, ab, out) as ints.
+    // The dtype fields keep distinct quant paths from sharing a plan.
+    using GemmKey = std::tuple<int, int, int, int, int, int, int>;
+
+    // Miss builds the desc and layouts and runs the heuristic once, then inserts.
+    // Hit returns the stored plan.
+    [[nodiscard]] const GemmPlan& get_or_build_plan(int                 m,
+                                                    int                 n,
+                                                    int                 k,
+                                                    cublasComputeType_t compute,
+                                                    cudaDataType_t      scale_type,
+                                                    cudaDataType_t      ab_type,
+                                                    cudaDataType_t      out_type);
+
+    // cuBLASLt workspace cap, shared by every GEMM dtype. 32 MiB follows NVIDIA's
+    // cuBLASLt workspace recommendation.
     static constexpr std::size_t kWorkspaceBytes = std::size_t{32} << 20;
 
     LtHandle                            handle_;
     device::DeviceUniquePtr<std::byte>  workspace_;
+    std::map<GemmKey, GemmPlan>         plan_cache_;
 };
 
 }  // namespace runtherder::kernels
