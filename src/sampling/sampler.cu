@@ -1,11 +1,8 @@
 #include <runtherder/sampling/sampler.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
-#include <numeric>
 #include <random>
-#include <vector>
 
 #include <cub/cub.cuh>
 #include <cuda_bf16.h>
@@ -25,22 +22,20 @@ std::size_t align_up(std::size_t x) {
     return (x + kAlign - 1) & ~(kAlign - 1);
 }
 
-// Device pipeline scratch carved from the Sampler slab. The layout here must
-// match scratch_total_bytes below.
+// Device pipeline scratch, carved from the Sampler slab by layout().
 struct Scratch {
     float* logits_f;     // [vocab]
     int*   idx;          // [vocab]
     float* keys_sorted;  // [vocab]
     int*   idx_sorted;   // [vocab]
-    float* cumsum;       // [vocab]
-    float* max_val;      // [1], the ArgMax extremum sink
+    float* prefix_mass;  // [vocab]
+    float* max_val;      // [1], where Max/ArgMax writes the result
     int*   token_out;    // [1]
     void*  cub_temp;     // [cub_temp_bytes]
 };
 
-// Single source of truth for the scratch layout, so the ctor sizing and the
-// per call carve cannot drift. A null base tallies total bytes only. A real
-// base with out set also fills the carved pointers.
+// A null base returns the total byte count. A real base with out set carves
+// the slab into the pointer bundle.
 std::size_t layout(std::byte* base, int vocab, std::size_t cub_temp_bytes, Scratch* out) {
     const std::size_t v   = static_cast<std::size_t>(vocab);
     std::size_t       off = 0;
@@ -53,7 +48,7 @@ std::size_t layout(std::byte* base, int vocab, std::size_t cub_temp_bytes, Scrat
     std::byte* const p_idx         = take(v * sizeof(int));
     std::byte* const p_keys_sorted = take(v * sizeof(float));
     std::byte* const p_idx_sorted  = take(v * sizeof(int));
-    std::byte* const p_cumsum      = take(v * sizeof(float));
+    std::byte* const p_prefix_mass = take(v * sizeof(float));
     std::byte* const p_max_val     = take(sizeof(float));
     std::byte* const p_token_out   = take(sizeof(int));
     std::byte* const p_cub_temp    = take(cub_temp_bytes);
@@ -62,7 +57,7 @@ std::size_t layout(std::byte* base, int vocab, std::size_t cub_temp_bytes, Scrat
         out->idx         = reinterpret_cast<int*>(p_idx);
         out->keys_sorted = reinterpret_cast<float*>(p_keys_sorted);
         out->idx_sorted  = reinterpret_cast<int*>(p_idx_sorted);
-        out->cumsum      = reinterpret_cast<float*>(p_cumsum);
+        out->prefix_mass = reinterpret_cast<float*>(p_prefix_mass);
         out->max_val     = reinterpret_cast<float*>(p_max_val);
         out->token_out   = reinterpret_cast<int*>(p_token_out);
         out->cub_temp    = p_cub_temp;
@@ -77,8 +72,69 @@ __global__ void to_float_kernel(float* out, const __nv_bfloat16* in, int n) {
     }
 }
 
-// Matches the host argmax exactly: bf16 widened to float is exact, so the max
-// element is the same one the host loop finds.
+__global__ void scale_and_iota_kernel(float*               out,
+                                      int*                 idx,
+                                      const __nv_bfloat16* in,
+                                      float                inv_t,
+                                      int                  n) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        out[i] = static_cast<float>(in[i]) * inv_t;
+        idx[i] = i;
+    }
+}
+
+// No 1/sum normalization, it divides out of the draw downstream.
+__global__ void exp_shift_kernel(float* probs, const float* max_val, int n) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        probs[i] = expf(probs[i] - *max_val);
+    }
+}
+
+// prefix_mass is nondecreasing, both cuts are binary searches over it. The
+// total mass divides out of the draw, it is needed only for the top_p threshold.
+__global__ void select_kernel(int*         token_out,
+                              const float* prefix_mass,
+                              const int*   idx_sorted,
+                              int          vocab,
+                              int          top_k,
+                              float        top_p,
+                              float        u01) {
+    int keep = (top_k > 0 && top_k < vocab) ? top_k : vocab;
+
+    if (top_p < 1.0F) {
+        const float thresh = top_p * prefix_mass[vocab - 1];
+        int         lo     = 0;
+        int         hi     = keep;
+        while (lo < hi) {
+            const int mid = lo + (hi - lo) / 2;
+            if (prefix_mass[mid] >= thresh) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        keep = (lo < keep) ? (lo + 1) : keep;
+    }
+
+    // Strict >: a zero mass token shares its neighbor's prefix and is never drawn.
+    const float target = u01 * prefix_mass[keep - 1];
+    int         lo     = 0;
+    int         hi     = keep;
+    while (lo < hi) {
+        const int mid = lo + (hi - lo) / 2;
+        if (prefix_mass[mid] > target) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    const int r = (lo < keep) ? lo : (keep - 1);
+    *token_out  = idx_sorted[r];
+}
+
+// bf16 widened to float is exact, so ArgMax lands on the true maximum score.
 int greedy_argmax_device(std::byte*           scratch,
                          int                  vocab,
                          std::size_t          cub_temp_bytes,
@@ -101,6 +157,49 @@ int greedy_argmax_device(std::byte*           scratch,
     return host_idx;
 }
 
+// u01 is drawn host side, one rng advance per stochastic token.
+int stochastic_sample_device(std::byte*            scratch,
+                             int                   vocab,
+                             std::size_t           cub_temp_bytes,
+                             const __nv_bfloat16*  logits,
+                             const SamplingParams& params,
+                             float                 u01) {
+    Scratch s;
+    layout(scratch, vocab, cub_temp_bytes, &s);
+
+    constexpr int block = 256;
+    const int     grid  = (vocab + block - 1) / block;
+
+    const float inv_t = 1.0F / params.temperature;
+    scale_and_iota_kernel<<<grid, block>>>(s.logits_f, s.idx, logits, inv_t, vocab);
+    RUNTHERDER_CUDA_CHECK_LAST();
+
+    std::size_t temp_bytes = cub_temp_bytes;
+    RUNTHERDER_CUDA_CHECK(cub::DeviceReduce::Max(
+        s.cub_temp, temp_bytes, s.logits_f, s.max_val, vocab));
+
+    exp_shift_kernel<<<grid, block>>>(s.logits_f, s.max_val, vocab);
+    RUNTHERDER_CUDA_CHECK_LAST();
+
+    // Full sort over the vocab, O(vocab), not a partial top_k selection.
+    temp_bytes = cub_temp_bytes;
+    RUNTHERDER_CUDA_CHECK(cub::DeviceRadixSort::SortPairsDescending(
+        s.cub_temp, temp_bytes, s.logits_f, s.keys_sorted, s.idx, s.idx_sorted, vocab));
+
+    temp_bytes = cub_temp_bytes;
+    RUNTHERDER_CUDA_CHECK(cub::DeviceScan::InclusiveSum(
+        s.cub_temp, temp_bytes, s.keys_sorted, s.prefix_mass, vocab));
+
+    select_kernel<<<1, 1>>>(s.token_out, s.prefix_mass, s.idx_sorted, vocab,
+                            params.top_k, params.top_p, u01);
+    RUNTHERDER_CUDA_CHECK_LAST();
+
+    int host_idx = 0;
+    RUNTHERDER_CUDA_CHECK(cudaMemcpy(&host_idx, s.token_out, sizeof(int),
+                                     cudaMemcpyDeviceToHost));
+    return host_idx;
+}
+
 }  // namespace
 
 Sampler::Sampler(int vocab_size, std::uint64_t seed)
@@ -110,7 +209,6 @@ Sampler::Sampler(int vocab_size, std::uint64_t seed)
     // cub_temp_bytes_ is the max over every pipeline op, so one slab serves all.
     std::size_t argmax_b = 0;
     std::size_t max_b    = 0;
-    std::size_t sum_b    = 0;
     std::size_t sort_b   = 0;
     std::size_t scan_b   = 0;
     RUNTHERDER_CUDA_CHECK(cub::DeviceReduce::ArgMax(
@@ -119,9 +217,6 @@ Sampler::Sampler(int vocab_size, std::uint64_t seed)
     RUNTHERDER_CUDA_CHECK(cub::DeviceReduce::Max(
         nullptr, max_b, static_cast<float*>(nullptr),
         static_cast<float*>(nullptr), vocab_size));
-    RUNTHERDER_CUDA_CHECK(cub::DeviceReduce::Sum(
-        nullptr, sum_b, static_cast<float*>(nullptr),
-        static_cast<float*>(nullptr), vocab_size));
     RUNTHERDER_CUDA_CHECK(cub::DeviceRadixSort::SortPairsDescending(
         nullptr, sort_b, static_cast<float*>(nullptr), static_cast<float*>(nullptr),
         static_cast<int*>(nullptr), static_cast<int*>(nullptr), vocab_size));
@@ -129,7 +224,7 @@ Sampler::Sampler(int vocab_size, std::uint64_t seed)
         nullptr, scan_b, static_cast<float*>(nullptr),
         static_cast<float*>(nullptr), vocab_size));
 
-    cub_temp_bytes_ = std::max({argmax_b, max_b, sum_b, sort_b, scan_b});
+    cub_temp_bytes_ = std::max({argmax_b, max_b, sort_b, scan_b});
     scratch_        = device::make_device_unique<std::byte>(
         layout(nullptr, vocab_size, cub_temp_bytes_, nullptr));
 }
@@ -139,68 +234,10 @@ int Sampler::sample(const __nv_bfloat16* logits, const SamplingParams& params) {
         return greedy_argmax_device(scratch_.get(), vocab_size_, cub_temp_bytes_, logits);
     }
 
-    const std::size_t           n = static_cast<std::size_t>(vocab_size_);
-    std::vector<__nv_bfloat16>  host(n);
-    RUNTHERDER_CUDA_CHECK(cudaMemcpy(host.data(), logits,
-                                     n * sizeof(__nv_bfloat16),
-                                     cudaMemcpyDeviceToHost));
-
-    std::vector<float> probs(n);
-    const float        inv_t = 1.0F / params.temperature;
-    float              max_logit = -INFINITY;
-    for (std::size_t i = 0; i < n; ++i) {
-        probs[i]  = static_cast<float>(host[i]) * inv_t;
-        max_logit = std::max(max_logit, probs[i]);
-    }
-
-    float sum = 0.0F;
-    for (std::size_t i = 0; i < n; ++i) {
-        probs[i] = std::exp(probs[i] - max_logit);
-        sum += probs[i];
-    }
-    for (std::size_t i = 0; i < n; ++i) {
-        probs[i] /= sum;
-    }
-
-    std::vector<int> order(n);
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(),
-              [&](int a, int b) { return probs[a] > probs[b]; });
-
-    std::size_t keep = n;
-    if (params.top_k > 0) {
-        keep = std::min(keep, static_cast<std::size_t>(params.top_k));
-    }
-    if (params.top_p < 1.0F) {
-        float       cum     = 0.0F;
-        std::size_t nucleus = 0;
-        for (; nucleus < keep; ++nucleus) {
-            cum += probs[order[nucleus]];
-            if (cum >= params.top_p) {
-                ++nucleus;
-                break;
-            }
-        }
-        keep = nucleus;
-    }
-
-    float kept_sum = 0.0F;
-    for (std::size_t r = 0; r < keep; ++r) {
-        kept_sum += probs[order[r]];
-    }
-
-    // Draw over the unnormalized survivors. Scaling u by kept_sum is the
-    // renormalization, no second pass over probs.
     std::uniform_real_distribution<float> dist(0.0F, 1.0F);
-    const float                           u = dist(rng_) * kept_sum;
-    float                                 cum = 0.0F;
-    for (std::size_t r = 0; r < keep; ++r) {
-        cum += probs[order[r]];
-        if (u < cum) {
-            return order[r];
-        }
-    }
-    return order[keep - 1];
+    const float                           u01 = dist(rng_);
+    return stochastic_sample_device(scratch_.get(), vocab_size_, cub_temp_bytes_,
+                                    logits, params, u01);
 }
 
 }  // namespace runtherder::sampling

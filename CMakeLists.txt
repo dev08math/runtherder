@@ -62,7 +62,6 @@ set_target_properties(runtherder_attention PROPERTIES
 target_link_libraries(runtherder_attention PUBLIC runtherder_headers runtherder_kernels)
 
 add_library(runtherder_sampling STATIC
-    src/sampling/greedy.cu
     src/sampling/sampler.cu
 )
 set_target_properties(runtherder_sampling PROPERTIES
