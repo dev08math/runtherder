@@ -194,17 +194,23 @@ namespace {
 
 constexpr float kFp8E4M3Max = 448.0f;
 
+// x is indexed by the local row, q and scale by the destination row the write
+// lands at. *at_pos is read once per block.
 template <int VecsPerThread>
 __global__ void quantize_kv_fp8_kernel(
     __nv_fp8_e4m3* __restrict__       q,
     float* __restrict__               scale,
     const __nv_bfloat16* __restrict__ x,
+    const int* __restrict__           at_pos,
+    int                               rows_per_pos,
     int                               dim) {
-    const int row    = blockIdx.x;
-    const int tid    = threadIdx.x;
-    const int n_vecs = dim / kVecWidth;
+    const int       row     = blockIdx.x;
+    const int       tid     = threadIdx.x;
+    const int       n_vecs  = dim / kVecWidth;
+    const long long dst_row = static_cast<long long>(row) +
+                              static_cast<long long>(*at_pos) * rows_per_pos;
 
-    const __nv_bfloat16* x_row = x + row * dim;
+    const __nv_bfloat16* x_row = x + static_cast<long long>(row) * dim;
 
     float cache[VecsPerThread * kVecWidth];
     float local_absmax = 0.0f;
@@ -227,13 +233,13 @@ __global__ void quantize_kv_fp8_kernel(
 
     __shared__ float row_inv_scale;
     if (tid == 0) {
-        scale[row]    = absmax / kFp8E4M3Max;
-        row_inv_scale = (absmax > 0.0f) ? (kFp8E4M3Max / absmax) : 0.0f;
+        scale[dst_row] = absmax / kFp8E4M3Max;
+        row_inv_scale  = (absmax > 0.0f) ? (kFp8E4M3Max / absmax) : 0.0f;
     }
     __syncthreads();
 
     const float    inv_scale = row_inv_scale;
-    __nv_fp8_e4m3* q_row     = q + row * dim;
+    __nv_fp8_e4m3* q_row     = q + dst_row * dim;
 
     slot = 0;
     for (int i = tid; i < n_vecs; i += blockDim.x) {
@@ -251,11 +257,13 @@ template <int VecsPerThread>
 inline void launch_kv_fp8(__nv_fp8_e4m3*       q,
                           float*               scale,
                           const __nv_bfloat16* x,
+                          const int*           at_pos,
+                          int                  rows_per_pos,
                           int                  num_rows,
                           int                  dim,
                           cudaStream_t         stream) {
     quantize_kv_fp8_kernel<VecsPerThread>
-        <<<num_rows, kBlockSize, 0, stream>>>(q, scale, x, dim);
+        <<<num_rows, kBlockSize, 0, stream>>>(q, scale, x, at_pos, rows_per_pos, dim);
     RUNTHERDER_CUDA_CHECK_LAST();
 }
 
@@ -264,10 +272,14 @@ inline void launch_kv_fp8(__nv_fp8_e4m3*       q,
 void quantize_kv_fp8(__nv_fp8_e4m3*       q,
                      float*               scale,
                      const __nv_bfloat16* x,
+                     const int*           at_pos,
+                     int                  rows_per_pos,
                      int                  num_rows,
                      int                  head_dim,
                      cudaStream_t         stream) {
     RUNTHERDER_CHECK(num_rows >= 1, "num_rows must be >= 1");
+    RUNTHERDER_CHECK(at_pos != nullptr, "at_pos must not be null");
+    RUNTHERDER_CHECK(rows_per_pos >= 1, "rows_per_pos must be >= 1");
     RUNTHERDER_CHECK(head_dim >= kVecWidth, "head_dim must be >= 8");
     RUNTHERDER_CHECK(head_dim % kVecWidth == 0, "head_dim must be divisible by 8");
 
@@ -276,20 +288,20 @@ void quantize_kv_fp8(__nv_fp8_e4m3*       q,
 
     switch (vecs_per_thread) {
         case 1:
-            launch_kv_fp8<1>(q, scale, x, num_rows, head_dim, stream);
+            launch_kv_fp8<1>(q, scale, x, at_pos, rows_per_pos, num_rows, head_dim, stream);
             break;
         case 2:
-            launch_kv_fp8<2>(q, scale, x, num_rows, head_dim, stream);
+            launch_kv_fp8<2>(q, scale, x, at_pos, rows_per_pos, num_rows, head_dim, stream);
             break;
         case 3:
         case 4:
-            launch_kv_fp8<4>(q, scale, x, num_rows, head_dim, stream);
+            launch_kv_fp8<4>(q, scale, x, at_pos, rows_per_pos, num_rows, head_dim, stream);
             break;
         case 5:
         case 6:
         case 7:
         case 8:
-            launch_kv_fp8<8>(q, scale, x, num_rows, head_dim, stream);
+            launch_kv_fp8<8>(q, scale, x, at_pos, rows_per_pos, num_rows, head_dim, stream);
             break;
         default:
             RUNTHERDER_CHECK(false, "head_dim too large for current dispatch");

@@ -52,40 +52,39 @@ public:
     KVCache& operator=(const KVCache&)     = delete;
 
     /**
-     * @brief Quantizes n_new bf16 keys and values into layer at row at_pos.
+     * @brief Quantizes n_new bf16 keys and values into layer at row *at_pos.
      * @param k       [n_new, num_kv_heads, head_dim] bf16
      * @param v       [n_new, num_kv_heads, head_dim] bf16
-     * @param at_pos  row offset to write at, the caller owned write position
+     * @param at_pos  device resident write position. Unchecked against
+     *                max_seq_len, the caller owns that bound.
      */
     void append(int layer, const __nv_bfloat16* k, const __nv_bfloat16* v,
-                int n_new, int at_pos, cudaStream_t stream) {
+                int n_new, const int* at_pos, cudaStream_t stream) {
         RUNTHERDER_CHECK(layer >= 0 && layer < num_layers_, "KVCache append layer out of range");
         RUNTHERDER_CHECK(n_new >= 1, "KVCache append n_new must be >= 1");
-        RUNTHERDER_CHECK(at_pos >= 0, "KVCache append at_pos must be >= 0");
-        RUNTHERDER_CHECK(at_pos + n_new <= max_seq_len_, "KVCache append exceeds max_seq_len");
+        RUNTHERDER_CHECK(at_pos != nullptr, "KVCache append at_pos must not be null");
 
-        const std::size_t dst = static_cast<std::size_t>(layer) * static_cast<std::size_t>(layer_stride_) +
-                                static_cast<std::size_t>(at_pos) * static_cast<std::size_t>(kv_dim_);
-        const std::size_t sdst = static_cast<std::size_t>(layer) * static_cast<std::size_t>(scale_layer_stride_) +
-                                 static_cast<std::size_t>(at_pos) * static_cast<std::size_t>(num_kv_heads_);
+        const std::size_t dst = static_cast<std::size_t>(layer) *
+                                static_cast<std::size_t>(layer_stride_);
+        const std::size_t sdst = static_cast<std::size_t>(layer) *
+                                 static_cast<std::size_t>(scale_layer_stride_);
         const int num_rows = n_new * num_kv_heads_;
 
         kernels::quantize_kv_fp8(k_.get() + dst, k_scale_.get() + sdst, k,
-                                 num_rows, head_dim_, stream);
+                                 at_pos, num_kv_heads_, num_rows, head_dim_, stream);
         kernels::quantize_kv_fp8(v_.get() + dst, v_scale_.get() + sdst, v,
-                                 num_rows, head_dim_, stream);
+                                 at_pos, num_kv_heads_, num_rows, head_dim_, stream);
     }
 
-    [[nodiscard]] attention::KVView view(int layer, int len) const {
+    [[nodiscard]] attention::KVView view(int layer) const {
         RUNTHERDER_CHECK(layer >= 0 && layer < num_layers_, "KVCache view layer out of range");
-        RUNTHERDER_CHECK(len >= 1 && len <= max_seq_len_, "KVCache view len out of range");
 
         const std::size_t base = static_cast<std::size_t>(layer) *
                                  static_cast<std::size_t>(layer_stride_);
         const std::size_t sbase = static_cast<std::size_t>(layer) *
                                   static_cast<std::size_t>(scale_layer_stride_);
         return attention::KVView{k_.get() + base, v_.get() + base,
-                                 k_scale_.get() + sbase, v_scale_.get() + sbase, len};
+                                 k_scale_.get() + sbase, v_scale_.get() + sbase};
     }
 
     [[nodiscard]] int max_seq_len() const noexcept { return max_seq_len_; }

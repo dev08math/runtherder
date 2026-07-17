@@ -35,9 +35,12 @@ void dequantize_w8a8(__nv_bfloat16*       y,
                      cudaStream_t         stream = nullptr);
 
 /**
- * @param q      [num_rows, head_dim]  E4M3
- * @param scale  [num_rows]            per row, amax / 448, symmetric
- * @param x      [num_rows, head_dim]  bf16 source
+ * @param q             E4M3 destination, rows at_pos * rows_per_pos onward
+ * @param scale         per row, amax / 448, symmetric. Same rows as q.
+ * @param x             [num_rows, head_dim] bf16 source, indexed from row 0
+ * @param at_pos        device resident, the position the write lands at.
+ *                      Unchecked, the caller owns the bound against q.
+ * @param rows_per_pos  rows one position spans, num_kv_heads for a KV slab
  *
  * One row per quant group. For a per (token, kv_head) KV scale pass
  * num_rows = n_new * num_kv_heads and head_dim as the row width.
@@ -45,6 +48,8 @@ void dequantize_w8a8(__nv_bfloat16*       y,
 void quantize_kv_fp8(__nv_fp8_e4m3*       q,
                      float*               scale,
                      const __nv_bfloat16* x,
+                     const int*           at_pos,
+                     int                  rows_per_pos,
                      int                  num_rows,
                      int                  head_dim,
                      cudaStream_t         stream = nullptr);

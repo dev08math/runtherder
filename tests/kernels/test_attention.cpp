@@ -35,8 +35,15 @@ QuantizedKV quantize_kv(const std::vector<__nv_bfloat16>& x,
 
     DeviceBuffer<__nv_bfloat16> x_dev(x.size());
     x_dev.copy_from_host(x.data());
+
+    // Standalone slab, the write starts at row 0.
+    constexpr int     kAtZero = 0;
+    DeviceBuffer<int> at_pos(1);
+    at_pos.copy_from_host(&kAtZero);
+
     runtherder::kernels::quantize_kv_fp8(
-        out.q.data(), out.scale.data(), x_dev.data(), num_rows, head_dim, nullptr);
+        out.q.data(), out.scale.data(), x_dev.data(), at_pos.data(),
+        /*rows_per_pos=*/1, num_rows, head_dim, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
 
     std::vector<__nv_fp8_e4m3> q_host(x.size());
@@ -199,10 +206,15 @@ void run_case(int num_tokens,
     DeviceBuffer<__nv_bfloat16> out_dev(q_count);
     q_dev.copy_from_host(q_host.data());
 
+    constexpr int     kNoCache = 0;
+    DeviceBuffer<int> cache_len_dev(1);
+    cache_len_dev.copy_from_host(&kNoCache);
+
     runtherder::kernels::attention_causal_bf16(
         out_dev.data(), q_dev.data(), k.q.data(), v.q.data(),
         k.scale.data(), v.scale.data(),
-        num_tokens, /*cache_len=*/0, num_q_heads, num_kv_heads, head_dim, scale, nullptr);
+        num_tokens, cache_len_dev.data(), num_q_heads, num_kv_heads, head_dim,
+        scale, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
 
     std::vector<__nv_bfloat16> out(q_count);
@@ -252,10 +264,14 @@ void run_decode_case(int cache_len,
     DeviceBuffer<__nv_bfloat16> out_dev(q_new);
     q_dev.copy_from_host(q_host.data() + q_off);
 
+    DeviceBuffer<int> cache_len_dev(1);
+    cache_len_dev.copy_from_host(&cache_len);
+
     runtherder::kernels::attention_causal_bf16(
         out_dev.data(), q_dev.data(), k.q.data(), v.q.data(),
         k.scale.data(), v.scale.data(),
-        n_new, cache_len, num_q_heads, num_kv_heads, head_dim, scale, nullptr);
+        n_new, cache_len_dev.data(), num_q_heads, num_kv_heads, head_dim, scale,
+        nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
 
     std::vector<__nv_bfloat16> out(q_new);

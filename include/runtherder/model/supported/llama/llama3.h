@@ -26,19 +26,20 @@ namespace runtherder::model::llama3 {
  * @param config        the loaded model hyperparameters.
  * @param scratch       forward scratch arena, sized by scratch_bytes().
  * @param dev_token_ids device buffer of n token ids.
+ * @param positions     [n] device sequence positions, iota from start_pos.
  * @param ctx           engine context (matmul, attention, KV cache).
  * @param n             token count, non empty.
- * @param start_pos     position of the first token in the sequence.
- * @param stream        CUDA stream for the attention kernels.
+ * @param stream        CUDA stream every kernel is launched on.
  * @pre weights arranged by arrange() against config.
+ * @note Device work only. Host to device staging belongs to the caller.
  */
 [[nodiscard]] LlamaLogits forward(const LlamaWeights&    weights,
                                   const LlamaConfig&     config,
                                   device::ScratchArena&  scratch,
                                   const int*             dev_token_ids,
+                                  const int*             positions,
                                   engine::EngineContext& ctx,
                                   std::size_t            n,
-                                  int                    start_pos,
                                   cudaStream_t           stream = nullptr);
 
 /**

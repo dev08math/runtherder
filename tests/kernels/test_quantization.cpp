@@ -72,8 +72,12 @@ void run_case(int num_rows, int head_dim, std::uint32_t seed) {
     DeviceBuffer<float>         s_dev(static_cast<std::size_t>(num_rows));
     x_dev.copy_from_host(x_host.data());
 
-    quantize_kv_fp8(q_dev.data(), s_dev.data(), x_dev.data(),
-                    num_rows, head_dim, nullptr);
+    constexpr int     kAtZero = 0;
+    DeviceBuffer<int> at_pos(1);
+    at_pos.copy_from_host(&kAtZero);
+
+    quantize_kv_fp8(q_dev.data(), s_dev.data(), x_dev.data(), at_pos.data(),
+                    /*rows_per_pos=*/1, num_rows, head_dim, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
 
     std::vector<__nv_fp8_e4m3> q_host(x_host.size());
@@ -143,8 +147,12 @@ TEST(QuantizeKvFp8, ZeroRowMapsToZero) {
     DeviceBuffer<float>         s_dev(static_cast<std::size_t>(num_rows));
     x_dev.copy_from_host(x_host.data());
 
-    quantize_kv_fp8(q_dev.data(), s_dev.data(), x_dev.data(),
-                    num_rows, head_dim, nullptr);
+    constexpr int     kAtZero = 0;
+    DeviceBuffer<int> at_pos(1);
+    at_pos.copy_from_host(&kAtZero);
+
+    quantize_kv_fp8(q_dev.data(), s_dev.data(), x_dev.data(), at_pos.data(),
+                    /*rows_per_pos=*/1, num_rows, head_dim, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
 
     std::vector<__nv_fp8_e4m3> q_host(x_host.size());

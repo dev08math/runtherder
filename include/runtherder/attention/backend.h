@@ -32,13 +32,14 @@ public:
      * @brief Causal attention. out is [n_new, num_q_heads, head_dim].
      * @param q          [n_new, num_q_heads, head_dim]
      * @param kv         cached keys and values, each [cache_len + n_new, num_kv_heads, head_dim]
-     * @param cache_len  keys already cached before these n_new queries
+     * @param cache_len  device resident, the keys already cached before these
+     *                   n_new queries.
      */
     virtual void run(__nv_bfloat16*       out,
                      const __nv_bfloat16* q,
                      const KVView&        kv,
                      int                  n_new,
-                     int                  cache_len,
+                     const int*           cache_len,
                      cudaStream_t         stream) = 0;
 
 protected:

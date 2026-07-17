@@ -9,31 +9,6 @@
 namespace runtherder::kernels {
 
 /**
- * @brief Causal attention for a single query token against an E4M3 KV cache.
- * @param out        [num_q_heads, head_dim] bf16
- * @param q          [num_q_heads, head_dim] bf16
- * @param k          [cache_len + 1, num_kv_heads, head_dim] E4M3
- * @param v          [cache_len + 1, num_kv_heads, head_dim] E4M3
- * @param k_scale    [cache_len + 1, num_kv_heads] per (token, kv_head) dequant
- * @param v_scale    [cache_len + 1, num_kv_heads] per (token, kv_head) dequant
- * @param cache_len  keys cached before this query. Attends cache_len + 1 keys.
- * @note head_dim maps to block threads, capped at the launch site.
- */
-void flash_decode_bf16(
-    __nv_bfloat16*       out,
-    const __nv_bfloat16* q,
-    const __nv_fp8_e4m3* k,
-    const __nv_fp8_e4m3* v,
-    const float*         k_scale,
-    const float*         v_scale,
-    int                  cache_len,
-    int                  num_q_heads,
-    int                  num_kv_heads,
-    int                  head_dim,
-    float                scale,
-    cudaStream_t         stream = nullptr);
-
-/**
  * @brief Float count for the partial scratch of a split decode at max_splits.
  *        Layout is [num_q_heads, max_splits] m, then l, then
  *        [num_q_heads, max_splits, head_dim] acc, one contiguous slab.
@@ -60,11 +35,13 @@ void flash_decode_bf16(
  * @param partial     caller owned scratch, at least
  *                    flash_split_scratch_floats(num_q_heads, head_dim, num_splits)
  *                    floats. Carved into m, l, acc by the launcher.
- * @param num_splits  chunk count, >= 1. partial must be sized for it.
- * @param cache_len   keys cached before this query. Attends cache_len + 1 keys.
- * @note Same shape and dtype preconditions as flash_decode_bf16. Output is the
- *       online softmax result. The split reassociates the float accumulation so
- *       it can differ from the single block kernel in the last bits, not in value.
+ * @param num_splits  chunk count, >= 1. partial must be sized for it. Any value
+ *                    is correct at any *cache_len.
+ * @param cache_len   device resident, the keys cached before this query. Attends
+ *                    *cache_len + 1 keys. Unchecked at the launch site.
+ * @note head_dim maps to block threads, capped at the launch site. Output is the
+ *       online softmax result. The split reassociates the float accumulation and
+ *       can differ from a serial accumulation in the last bits, not in value.
  */
 void flash_decode_split_bf16(
     __nv_bfloat16*       out,
@@ -75,7 +52,7 @@ void flash_decode_split_bf16(
     const float*         v_scale,
     float*               partial,
     int                  num_splits,
-    int                  cache_len,
+    const int*           cache_len,
     int                  num_q_heads,
     int                  num_kv_heads,
     int                  head_dim,

@@ -196,17 +196,20 @@ struct LlamaLogits {
 
 /**
  * @brief Llama family implementation of the ModelArchitecture interface. Owns
- *        its forward scratch and token staging, both sized for max_batch_tokens.
- * @note forward() fails if the token count exceeds max_batch_tokens.
+ *        its forward scratch, token staging, and position staging, all sized for
+ *        max_batch_tokens.
+ * @note stage() fails if the token count exceeds max_batch_tokens.
  */
 class LlamaModel final : public ModelArchitecture {
 public:
     [[nodiscard]] static LlamaModel load(const std::filesystem::path& model_dir,
                                          std::size_t                  max_batch_tokens);
 
+    void stage(engine::EngineContext& ctx,
+               std::span<const int>   token_ids,
+               int                    start_pos) override;
+
     [[nodiscard]] Logits forward(engine::EngineContext& ctx,
-                                 std::span<const int>   token_ids,
-                                 int                    start_pos,
                                  cudaStream_t           stream = nullptr) override;
 
     [[nodiscard]] const LlamaConfig&  config()  const noexcept { return config_; }
@@ -220,6 +223,10 @@ private:
     std::size_t                  max_batch_tokens_;
     device::ScratchArena         scratch_;
     device::DeviceUniquePtr<int> staging_;
+    // Addresses stay fixed across steps, stage() rewrites the contents. A
+    // captured graph reads the same two pointers at every position.
+    device::DeviceUniquePtr<int> positions_;
+    std::size_t                  staged_n_         = 0;
 };
 
 }  // namespace runtherder::model

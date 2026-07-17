@@ -39,7 +39,7 @@ __global__ void attention_causal_bf16_kernel(
     const float* __restrict__         k_scale,
     const float* __restrict__         v_scale,
     int                               n_new,
-    int                               cache_len,
+    const int* __restrict__           cache_len,
     int                               num_q_heads,
     int                               num_kv_heads,
     int                               head_dim,
@@ -52,7 +52,7 @@ __global__ void attention_causal_bf16_kernel(
     const int qt     = idx / num_q_heads;
     const int qh     = idx % num_q_heads;
     const int kvh    = qh / (num_q_heads / num_kv_heads);
-    const int n_keys = cache_len + qt + 1;  // causal, keys 0 .. cache_len + qt
+    const int n_keys = *cache_len + qt + 1;  // causal, keys 0 .. cache_len + qt
 
     const __nv_bfloat16* q_row =
         q + (static_cast<long long>(qt) * num_q_heads + qh) * head_dim;
@@ -100,14 +100,14 @@ void attention_causal_bf16(
     const float*         k_scale,
     const float*         v_scale,
     int                  n_new,
-    int                  cache_len,
+    const int*           cache_len,
     int                  num_q_heads,
     int                  num_kv_heads,
     int                  head_dim,
     float                scale,
     cudaStream_t         stream) {
     RUNTHERDER_CHECK(n_new        >= 1, "n_new must be >= 1");
-    RUNTHERDER_CHECK(cache_len    >= 0, "cache_len must be >= 0");
+    RUNTHERDER_CHECK(cache_len != nullptr, "cache_len must not be null");
     RUNTHERDER_CHECK(num_q_heads  >= 1, "num_q_heads must be >= 1");
     RUNTHERDER_CHECK(num_kv_heads >= 1, "num_kv_heads must be >= 1");
     RUNTHERDER_CHECK(num_q_heads % num_kv_heads == 0,

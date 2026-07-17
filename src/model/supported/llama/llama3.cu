@@ -144,7 +144,7 @@ std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_token
     const std::size_t vocab            = config.base().vocab_size();
 
     constexpr std::size_t kAlign  = 256;
-    constexpr std::size_t kAllocs = 16;
+    constexpr std::size_t kAllocs = 15;
 
     const std::size_t bf16_elems =
         n * (5 * hidden_dim + 2 * q_dim + 2 * kv_dim + 2 * intermediate_dim) + vocab;
@@ -156,16 +156,16 @@ std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_token
                                    n * sizeof(float) +
                                    n * n_max * sizeof(std::int32_t);
 
-    return bf16_elems * sizeof(__nv_bfloat16) + n * sizeof(int) + w8a8_bytes + kAllocs * kAlign;
+    return bf16_elems * sizeof(__nv_bfloat16) + w8a8_bytes + kAllocs * kAlign;
 }
 
 LlamaLogits forward(const LlamaWeights&    weights,
                     const LlamaConfig&     config,
                     device::ScratchArena&  scratch,
                     const int*             dev_token_ids,
+                    const int*             positions,
                     engine::EngineContext& ctx,
                     std::size_t            n,
-                    int                    start_pos,
                     cudaStream_t           stream) {
     RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
 
@@ -201,13 +201,7 @@ LlamaLogits forward(const LlamaWeights&    weights,
     __nv_bfloat16* mlp_out    = scratch.alloc<__nv_bfloat16>(n * hidden_dim);
 
     kernels::embedding_lookup_bf16_forward(
-        hidden, bf16(weights.token_embedding()), ids, n_int, hidden_int);
-
-    int*             positions = scratch.alloc<int>(n);
-    std::vector<int> positions_host(n);
-    std::iota(positions_host.begin(), positions_host.end(), start_pos);
-    RUNTHERDER_CUDA_CHECK(cudaMemcpy(positions, positions_host.data(),
-                                     n * sizeof(int), cudaMemcpyHostToDevice));
+        hidden, bf16(weights.token_embedding()), ids, n_int, hidden_int, stream);
 
     const int n_max = static_cast<int>(std::max({q_dim, kv_dim, hidden_dim, intermediate_dim}));
     const int k_max = static_cast<int>(std::max({hidden_dim, q_dim, intermediate_dim}));
@@ -220,11 +214,11 @@ LlamaLogits forward(const LlamaWeights&    weights,
         if (i == 0) {
             kernels::rmsnorm_bf16_forward(
                 normed, hidden, bf16(layer.attn_norm), n_int, hidden_int,
-                config.rms_norm_eps());
+                config.rms_norm_eps(), stream);
         } else {
             kernels::rmsnorm_add_bf16_forward(
                 normed, hidden, mlp_out, hidden, bf16(layer.attn_norm),
-                n_int, hidden_int, config.rms_norm_eps());
+                n_int, hidden_int, config.rms_norm_eps(), stream);
         }
 
         linear(ctx.matmul(), w8, q, normed, layer.wq,
@@ -236,25 +230,25 @@ LlamaLogits forward(const LlamaWeights&    weights,
 
         kernels::rope_bf16(
             q, k, positions, weights.inv_freq(), n_int, num_q_heads, num_kv_heads,
-            head_dim);
+            head_dim, stream);
 
-        ctx.kv_cache().append(static_cast<int>(i), k, v, n_int, start_pos, stream);
-        const attention::KVView kv = ctx.kv_cache().view(static_cast<int>(i), start_pos + n_int);
-        ctx.attention().run(attn, q, kv, n_int, start_pos, stream);
+        ctx.kv_cache().append(static_cast<int>(i), k, v, n_int, ctx.decode_pos(), stream);
+        const attention::KVView kv = ctx.kv_cache().view(static_cast<int>(i));
+        ctx.attention().run(attn, q, kv, n_int, ctx.decode_pos(), stream);
 
         linear(ctx.matmul(), w8, attn_proj, attn, layer.wo,
                n_int, hidden_int, static_cast<int>(q_dim), stream);
 
         kernels::rmsnorm_add_bf16_forward(
             ffn_normed, hidden, attn_proj, hidden, bf16(layer.ffn_norm),
-            n_int, hidden_int, config.rms_norm_eps());
+            n_int, hidden_int, config.rms_norm_eps(), stream);
 
         linear(ctx.matmul(), w8, gate, ffn_normed, layer.w_gate,
                n_int, inter_int, hidden_int, stream);
         linear(ctx.matmul(), w8, up, ffn_normed, layer.w_up,
                n_int, inter_int, hidden_int, stream);
 
-        kernels::swiglu_bf16_forward(gate, gate, up, n_int * inter_int);
+        kernels::swiglu_bf16_forward(gate, gate, up, n_int * inter_int, stream);
 
         linear(ctx.matmul(), w8, mlp_out, gate, layer.w_down,
                n_int, hidden_int, inter_int, stream);
@@ -262,14 +256,14 @@ LlamaLogits forward(const LlamaWeights&    weights,
 
     kernels::rmsnorm_add_bf16_forward(
         normed, hidden, mlp_out, hidden, bf16(weights.final_norm()),
-        n_int, hidden_int, config.rms_norm_eps());
+        n_int, hidden_int, config.rms_norm_eps(), stream);
 
     const int      vocab_int = static_cast<int>(config.base().vocab_size());
     __nv_bfloat16* logits    = scratch.alloc<__nv_bfloat16>(vocab_int);
 
     const __nv_bfloat16* last = normed + static_cast<std::size_t>(n_int - 1) * hidden_dim;
     ctx.matmul().linear_bf16(logits, last, bf16(weights.lm_head()),
-                             1, vocab_int, hidden_int);
+                             1, vocab_int, hidden_int, stream);
 
     return LlamaLogits{logits, vocab_int};
 }

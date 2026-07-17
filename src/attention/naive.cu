@@ -12,7 +12,7 @@ void NaiveAttention::run(
     const __nv_bfloat16* q,
     const KVView&        kv,
     int                  n_new,
-    int                  cache_len,
+    const int*           cache_len,
     cudaStream_t         stream) {
     kernels::attention_causal_bf16(
         out, q, kv.k, kv.v, kv.k_scale, kv.v_scale,

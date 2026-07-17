@@ -193,7 +193,8 @@ LlamaModel::LlamaModel(LlamaConfig config, LlamaWeights weights, std::size_t max
       weights_(std::move(weights)),
       max_batch_tokens_(max_batch_tokens),
       scratch_(llama_scratch_bytes(config_, max_batch_tokens)),
-      staging_(device::make_device_unique<int>(max_batch_tokens)) {
+      staging_(device::make_device_unique<int>(max_batch_tokens)),
+      positions_(device::make_device_unique<int>(max_batch_tokens)) {
     RUNTHERDER_CHECK(max_batch_tokens_ >= 1, "max_batch_tokens must be >= 1");
 }
 
@@ -205,26 +206,45 @@ LlamaModel LlamaModel::load(const std::filesystem::path& model_dir,
     return LlamaModel(std::move(config), std::move(weights), max_batch_tokens);
 }
 
-Logits LlamaModel::forward(engine::EngineContext& ctx,
-                           std::span<const int>   token_ids,
-                           int                    start_pos,
-                           cudaStream_t           stream) {
+void LlamaModel::stage(engine::EngineContext& ctx,
+                       std::span<const int>   token_ids,
+                       int                    start_pos) {
     const std::size_t n = token_ids.size();
-    RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
+    RUNTHERDER_CHECK(n >= 1, "stage needs at least one token");
     RUNTHERDER_CHECK(n <= max_batch_tokens_, "token count exceeds model capacity");
+    RUNTHERDER_CHECK(start_pos >= 0, "start_pos must be >= 0");
+    // The only host side view of the write position. append() takes it device
+    // resident and cannot bound it.
+    RUNTHERDER_CHECK(start_pos + static_cast<int>(n) <= ctx.kv_cache().max_seq_len(),
+                     "sequence exceeds KV cache max_seq_len");
 
     RUNTHERDER_CUDA_CHECK(cudaMemcpy(staging_.get(), token_ids.data(),
                                      n * sizeof(int), cudaMemcpyHostToDevice));
 
+    std::vector<int> positions_host(n);
+    std::iota(positions_host.begin(), positions_host.end(), start_pos);
+    RUNTHERDER_CUDA_CHECK(cudaMemcpy(positions_.get(), positions_host.data(),
+                                     n * sizeof(int), cudaMemcpyHostToDevice));
+
+    ctx.set_decode_pos(start_pos);
+
+    staged_n_         = n;
+}
+
+Logits LlamaModel::forward(engine::EngineContext& ctx, cudaStream_t stream) {
+    RUNTHERDER_CHECK(staged_n_ >= 1, "forward called before stage");
+
     switch (config_.base().model_type()) {
         case ModelType::Qwen3: {
             const LlamaLogits out =
-                qwen3::forward(weights_, config_, scratch_, staging_.get(), ctx, n, start_pos, stream);
+                qwen3::forward(weights_, config_, scratch_, staging_.get(), positions_.get(),
+                               ctx, staged_n_, stream);
             return Logits{out.logits, out.vocab_size};
         }
         case ModelType::Llama3: {
             const LlamaLogits out =
-                llama3::forward(weights_, config_, scratch_, staging_.get(), ctx, n, start_pos, stream);
+                llama3::forward(weights_, config_, scratch_, staging_.get(), positions_.get(),
+                                ctx, staged_n_, stream);
             return Logits{out.logits, out.vocab_size};
         }
     }

@@ -23,7 +23,7 @@ public:
              const __nv_bfloat16* q,
              const KVView&        kv,
              int                  n_new,
-             int                  cache_len,
+             const int*           cache_len,
              cudaStream_t         stream) override;
 
 private:

@@ -1,9 +1,12 @@
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <random>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -35,7 +38,9 @@ std::size_t param_count(const runtherder::model::Tensor& t) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: runtherder <model_dir> [prompt...]\n");
+        std::fprintf(stderr,
+                     "usage: runtherder <model_dir> [--seed <n>] [--temp <f>] "
+                     "[--enforce-eager] [prompt...]\n");
         return EXIT_FAILURE;
     }
 
@@ -44,9 +49,29 @@ int main(int argc, char** argv) {
 
     const std::filesystem::path dir = argv[1];
 
-    std::string prompt;
+    std::string                 prompt;
+    std::optional<unsigned int> seed;
+    float                       temperature   = 0.7F;
+    bool                        enforce_eager = false;
+
     for (int i = 2; i < argc; ++i) {
-        if (i > 2) {
+        const std::string_view arg = argv[i];
+        if (arg == "--enforce-eager") {
+            enforce_eager = true;
+            continue;
+        }
+        if (arg == "--temp") {
+            RUNTHERDER_CHECK(i + 1 < argc, "--temp needs a value");
+            temperature = std::stof(argv[++i]);
+            RUNTHERDER_CHECK(temperature >= 0.0F, "--temp must be >= 0");
+            continue;
+        }
+        if (arg == "--seed") {
+            RUNTHERDER_CHECK(i + 1 < argc, "--seed needs a value");
+            seed = static_cast<unsigned int>(std::stoul(argv[++i]));
+            continue;
+        }
+        if (!prompt.empty()) {
             prompt += ' ';
         }
         prompt += argv[i];
@@ -112,11 +137,14 @@ int main(int argc, char** argv) {
         head_dim);
     eng::EngineContext ctx(max_batch_tokens, std::move(backend), std::move(kv_cache));
 
-    std::random_device            rd;
-    runtherder::sampling::Sampler sampler(static_cast<int>(model.config().base().vocab_size()), rd());
+    std::random_device rd;
+    const unsigned int seed_value = seed.value_or(rd());
+    runtherder::sampling::Sampler sampler(
+        static_cast<int>(model.config().base().vocab_size()), seed_value);
 
     runtherder::sampling::SamplingParams params;
-    params.temperature = 0.7F;
+    // temperature 0 selects greedy argmax, which draws no rng.
+    params.temperature = temperature;
     params.top_p       = 0.8F;
     params.top_k       = 20;
 
@@ -124,14 +152,30 @@ int main(int argc, char** argv) {
     eng::SequenceState seq = eng::SequenceState::create(0, static_cast<int>(ids.size()), params, stop);
 
     eng::VectorSink sink;
-    eng::Generator  generator(model, ctx, sampler);
+    eng::Generator  generator(model, ctx, sampler, enforce_eager);
+
+    const auto t0 = std::chrono::steady_clock::now();
     generator.generate(seq, ids, sink);
+    const auto t1 = std::chrono::steady_clock::now();
+
+    const double elapsed_s =
+        std::chrono::duration<double>(t1 - t0).count();
+    const double tokens_per_s =
+        static_cast<double>(sink.tokens().size()) / elapsed_s;
 
     const std::string completion = tokenizer.decode(sink.tokens());
 
     std::printf("prompt:        %s\n", prompt.c_str());
+    std::printf("decode:        %s\n", enforce_eager ? "eager" : "cuda graph");
+    std::printf("sampling:      temperature %.2f, top_p %.2f, top_k %d\n",
+                static_cast<double>(params.temperature),
+                static_cast<double>(params.top_p), params.top_k);
+    if (params.temperature != 0.0F) {
+        std::printf("seed:          %u\n", seed_value);
+    }
     std::printf("prompt tokens: %zu\n", ids.size());
-    std::printf("generated:     %zu tokens\n", sink.tokens().size());
+    std::printf("generated:     %zu tokens in %.3fs  (%.2f tok/s)\n",
+                sink.tokens().size(), elapsed_s, tokens_per_s);
     std::printf("completion:    \"%s\"\n", completion.c_str());
 
     return 0;

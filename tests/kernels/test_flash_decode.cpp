@@ -45,8 +45,15 @@ QuantizedKV quantize_kv(const std::vector<__nv_bfloat16>& x,
 
     DeviceBuffer<__nv_bfloat16> x_dev(x.size());
     x_dev.copy_from_host(x.data());
+
+    // Standalone slab, the write starts at row 0.
+    constexpr int     kAtZero = 0;
+    DeviceBuffer<int> at_pos(1);
+    at_pos.copy_from_host(&kAtZero);
+
     runtherder::kernels::quantize_kv_fp8(
-        out.q.data(), out.scale.data(), x_dev.data(), num_rows, head_dim, nullptr);
+        out.q.data(), out.scale.data(), x_dev.data(), at_pos.data(),
+        /*rows_per_pos=*/1, num_rows, head_dim, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
     return out;
 }
@@ -103,25 +110,19 @@ void run_case(int cache_len, int num_q_heads, int num_kv_heads,
     DeviceBuffer<__nv_bfloat16> q_dev(q_count);
     q_dev.copy_from_host(q_host.data());
 
+    DeviceBuffer<int> cache_len_dev(1);
+    cache_len_dev.copy_from_host(&cache_len);
+
     // Oracle: the naive kernel at the decode shape (n_new == 1).
     DeviceBuffer<__nv_bfloat16> out_naive(q_count);
     runtherder::kernels::attention_causal_bf16(
         out_naive.data(), q_dev.data(), k.q.data(), v.q.data(),
         k.scale.data(), v.scale.data(),
-        /*n_new=*/1, cache_len, num_q_heads, num_kv_heads, head_dim, scale, nullptr);
+        /*n_new=*/1, cache_len_dev.data(), num_q_heads, num_kv_heads, head_dim,
+        scale, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
     std::vector<__nv_bfloat16> naive_host(q_count);
     out_naive.copy_to_host(naive_host.data());
-
-    // Single block flash decode.
-    DeviceBuffer<__nv_bfloat16> out_single(q_count);
-    runtherder::kernels::flash_decode_bf16(
-        out_single.data(), q_dev.data(), k.q.data(), v.q.data(),
-        k.scale.data(), v.scale.data(),
-        cache_len, num_q_heads, num_kv_heads, head_dim, scale, nullptr);
-    RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
-    std::vector<__nv_bfloat16> single_host(q_count);
-    out_single.copy_to_host(single_host.data());
 
     // Split flash decode with backend owned scratch.
     DeviceBuffer<float> partial(runtherder::kernels::flash_split_scratch_floats(
@@ -130,16 +131,10 @@ void run_case(int cache_len, int num_q_heads, int num_kv_heads,
     runtherder::kernels::flash_decode_split_bf16(
         out_split.data(), q_dev.data(), k.q.data(), v.q.data(),
         k.scale.data(), v.scale.data(), partial.data(), num_splits,
-        cache_len, num_q_heads, num_kv_heads, head_dim, scale, nullptr);
+        cache_len_dev.data(), num_q_heads, num_kv_heads, head_dim, scale, nullptr);
     RUNTHERDER_CUDA_CHECK(cudaDeviceSynchronize());
     std::vector<__nv_bfloat16> split_host(q_count);
     out_split.copy_to_host(split_host.data());
-
-    const auto cs = compare_bf16(naive_host, single_host);
-    EXPECT_LE(cs.max_abs_err, kAbsTol)
-        << "single cache_len=" << cache_len << " splits=" << num_splits;
-    EXPECT_GE(cs.cosine_similarity, kCosFloor)
-        << "single cache_len=" << cache_len << " splits=" << num_splits;
 
     const auto sp = compare_bf16(naive_host, split_host);
     EXPECT_LE(sp.max_abs_err, kAbsTol)

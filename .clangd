@@ -4,6 +4,8 @@ CompileFlags:
     - --cuda-gpu-arch=sm_89
     - --cuda-path=/usr/local/cuda
     - -I/usr/local/cuda/targets/x86_64-linux/include/cccl
+    - -I../include
+    - -std=c++20
   Remove:
     - -forward-unknown-to-host-compiler
     - --generate-code=*

@@ -12,8 +12,10 @@ namespace runtherder::kernels {
  * @param q        [n_new, num_q_heads, head_dim] bf16
  * @param k        [cache_len + n_new, num_kv_heads, head_dim] E4M3
  * @param v        [cache_len + n_new, num_kv_heads, head_dim] E4M3
- * @param k_scale  [cache_len + n_new, num_kv_heads] per (token, kv_head) dequant
- * @param v_scale  [cache_len + n_new, num_kv_heads] per (token, kv_head) dequant
+ * @param k_scale   [cache_len + n_new, num_kv_heads] per (token, kv_head) dequant
+ * @param v_scale   [cache_len + n_new, num_kv_heads] per (token, kv_head) dequant
+ * @param cache_len device resident, the keys cached before these n_new queries.
+ *                  Unchecked at the launch site.
  * @note out distinct from k, v.
  */
 void attention_causal_bf16(
@@ -24,7 +26,7 @@ void attention_causal_bf16(
     const float*         k_scale,
     const float*         v_scale,
     int                  n_new,
-    int                  cache_len,
+    const int*           cache_len,
     int                  num_q_heads,
     int                  num_kv_heads,
     int                  head_dim,
