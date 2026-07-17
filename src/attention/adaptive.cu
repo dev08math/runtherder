@@ -6,11 +6,7 @@ namespace runtherder::attention {
 
 namespace {
 
-// Fixed, not sized from the history length: cache_len is device resident and
-// leaves the host nothing to branch on. The partial kernel derives its chunk
-// from *cache_len and sentinels the splits past the key count, correct at every
-// length. 24 heads * 8 = 192 blocks on the 36 SM 4070 Laptop. A short history
-// pays 8 near empty blocks where the old policy paid 1.
+// cache_len is device resident, the host cannot size this per step.
 constexpr int kMaxSplits = 8;
 
 }  // namespace

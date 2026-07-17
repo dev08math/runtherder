@@ -30,6 +30,8 @@ void rmsnorm_bf16_forward(
  * @param x         [num_tokens, hidden_dim]
  * @param residual  [num_tokens, hidden_dim]
  * @param g         [hidden_dim]
+ * @note h_out may alias residual. y must be distinct from h_out. Matches a
+ *       double precision reference within max abs 5e-2, cosine 0.9999.
  */
 void rmsnorm_add_bf16_forward(
     __nv_bfloat16*       y,

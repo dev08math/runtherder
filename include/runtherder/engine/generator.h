@@ -12,25 +12,27 @@
 namespace runtherder::engine {
 
 /**
- * @brief Autoregressive decode loop for one sequence. Captures the decode step
- *        into a CUDA graph and replays it per token.
+ * @brief Autoregressive decode loop for one sequence.
  */
 class Generator {
 public:
     /**
-     * @param enforce_eager  launches every step kernel by kernel, no capture.
-     *                       The reference path the graph is diffed against.
+     * @param model          outlives the Generator
+     * @param ctx            outlives the Generator
+     * @param sampler        outlives the Generator
+     * @param enforce_eager  launches every step kernel by kernel, no capture
      */
     Generator(model::ModelArchitecture& model,
               EngineContext&            ctx,
               sampling::Sampler&        sampler,
-              bool                      enforce_eager = false);
+              bool                      enforce_eager);
 
     /**
      * @brief Prefills prompt, then samples and emits to sink until EOS or max new
      *        tokens. The EOS token is not emitted.
-     * @param seq   sampling params and stop condition, advanced per token
-     * @param sink  receives each token, flushed at the end
+     * @param seq     sampling params and stop condition, advanced per token
+     * @param prompt  tokens to prefill, non empty
+     * @param sink    receives each token, flushed at the end
      */
     void generate(SequenceState& seq, std::span<const int> prompt, OutputSink& sink);
 

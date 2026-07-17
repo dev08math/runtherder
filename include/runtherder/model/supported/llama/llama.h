@@ -180,11 +180,6 @@ private:
 
 [[nodiscard]] device::DeviceUniquePtr<float> upload_rope_inv_freq(const std::vector<float>& host);
 
-struct LlamaLogits {
-    const __nv_bfloat16* logits;
-    int                  vocab_size;
-};
-
 /**
  * @brief Bytes the forward scratch arena needs for up to max_batch_tokens
  *        tokens. Dispatches on model_type to the per architecture sizing.
@@ -210,7 +205,7 @@ public:
                int                    start_pos) override;
 
     [[nodiscard]] Logits forward(engine::EngineContext& ctx,
-                                 cudaStream_t           stream = nullptr) override;
+                                 cudaStream_t           stream) override;
 
     [[nodiscard]] const LlamaConfig&  config()  const noexcept { return config_; }
     [[nodiscard]] const LlamaWeights& weights() const noexcept { return weights_; }
@@ -222,9 +217,9 @@ private:
     LlamaWeights                 weights_;
     std::size_t                  max_batch_tokens_;
     device::ScratchArena         scratch_;
+    // A captured graph froze these addresses. stage() rewrites the contents,
+    // never the pointers.
     device::DeviceUniquePtr<int> staging_;
-    // Addresses stay fixed across steps, stage() rewrites the contents. A
-    // captured graph reads the same two pointers at every position.
     device::DeviceUniquePtr<int> positions_;
     std::size_t                  staged_n_         = 0;
 };

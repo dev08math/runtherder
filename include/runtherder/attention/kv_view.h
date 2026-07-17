@@ -8,8 +8,8 @@ namespace runtherder::attention {
  * @brief View of one KV cache layer. k, v are E4M3 [max_seq_len, num_kv_heads,
  *        head_dim]. k_scale, v_scale are the per (token, kv_head) dequant scales
  *        [max_seq_len, num_kv_heads]. Recover one value:
- *        float(k[i]) * k_scale[token, kvh]. How far the history runs is the
- *        cache_len the backend takes, not part of the view.
+ *        float(k[i]) * k_scale[token, kvh]. The history length is the cache_len
+ *        the backend takes.
  */
 struct KVView {
     const __nv_fp8_e4m3* k;

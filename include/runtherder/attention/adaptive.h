@@ -10,10 +10,8 @@
 namespace runtherder::attention {
 
 /**
- * @brief Selects the attention kernel per request. Prefill (n_new > 1) delegates
- *        to NaiveAttention. Decode (n_new == 1) takes the single block flash
- *        kernel for a shallow cache, or the split kernel once the cache is deep
- *        enough that one block per head underfills the GPU.
+ * @brief Selects the attention kernel from the token count: prefill for
+ *        n_new > 1, split flash decode for n_new == 1.
  */
 class AdaptiveAttention final : public AttentionBackend {
 public:

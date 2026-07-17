@@ -48,6 +48,8 @@ int main(int argc, char** argv) {
     namespace eng = runtherder::engine;
 
     const std::filesystem::path dir = argv[1];
+    RUNTHERDER_CHECK(std::filesystem::is_directory(dir),
+                     "first argument must be the model dir");
 
     std::string                 prompt;
     std::optional<unsigned int> seed;
@@ -80,7 +82,7 @@ int main(int argc, char** argv) {
         prompt = "Runtherder is operational.";
     }
 
-    constexpr int max_new_tokens = 32;
+    constexpr int max_new_tokens = 256;
 
     auto                   tokenizer = runtherder::tokenizer::Tokenizer::load(dir);
     const std::vector<int> ids       = tokenizer.encode(prompt);

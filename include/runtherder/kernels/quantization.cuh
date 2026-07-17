@@ -9,6 +9,7 @@
 namespace runtherder::kernels {
 
 /**
+ * @brief q = round(x / x_scale), x_scale = row amax / 127.
  * @param q        [num_tokens, dim]
  * @param x_scale  [num_tokens], symmetric so no zero point
  * @param x        [num_tokens, dim]
@@ -21,6 +22,7 @@ void quantize_per_token_int8(std::int8_t*         q,
                              cudaStream_t         stream = nullptr);
 
 /**
+ * @brief y = acc * x_scale * w_scale.
  * @param y        [m, n]
  * @param acc      [m, n]
  * @param x_scale  [m], per row
@@ -35,15 +37,15 @@ void dequantize_w8a8(__nv_bfloat16*       y,
                      cudaStream_t         stream = nullptr);
 
 /**
+ * @brief q = x / scale, scale = row amax / 448. One row per quant group.
  * @param q             E4M3 destination, rows at_pos * rows_per_pos onward
  * @param scale         per row, amax / 448, symmetric. Same rows as q.
  * @param x             [num_rows, head_dim] bf16 source, indexed from row 0
  * @param at_pos        device resident, the position the write lands at.
  *                      Unchecked, the caller owns the bound against q.
  * @param rows_per_pos  rows one position spans, num_kv_heads for a KV slab
- *
- * One row per quant group. For a per (token, kv_head) KV scale pass
- * num_rows = n_new * num_kv_heads and head_dim as the row width.
+ * @note For a per (token, kv_head) KV scale pass num_rows = n_new * num_kv_heads
+ *       and head_dim as the row width.
  */
 void quantize_kv_fp8(__nv_fp8_e4m3*       q,
                      float*               scale,

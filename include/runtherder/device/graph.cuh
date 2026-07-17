@@ -13,8 +13,6 @@ namespace runtherder::device {
 
 /**
  * @brief Owns a non blocking CUDA stream.
- * @note The legacy default stream cannot be captured. Work destined for a graph
- *       launches here.
  */
 class CudaStream {
 public:
@@ -47,7 +45,7 @@ private:
 };
 
 /**
- * @brief One recorded stream capture, instantiated once and replayed per launch.
+ * @brief One recorded stream capture. Instantiated once, replayed per launch.
  */
 class CudaGraph {
 public:
@@ -61,10 +59,11 @@ public:
 
     /**
      * @brief Records body onto stream without running it, then instantiates.
+     * @param stream not the legacy default stream, which cannot be captured
+     * @param body invoked once during recording
      * @note body must issue device work only. A synchronous CUDA call inside it
      *       fails the capture and leaves stream unusable. Every pointer and
-     *       launch dimension body passes is frozen into the graph. Follow with
-     *       launch() to execute.
+     *       launch dimension body passes is frozen into the graph.
      */
     template <typename F>
     void capture(cudaStream_t stream, F&& body) {
@@ -75,7 +74,7 @@ public:
 
         cudaGraph_t raw_graph = nullptr;
         RUNTHERDER_CUDA_CHECK(cudaStreamEndCapture(stream, &raw_graph));
-        graph_.reset(raw_graph);
+        const GraphPtr graph(raw_graph);
 
         cudaGraphExec_t raw_exec = nullptr;
         RUNTHERDER_CUDA_CHECK(cudaGraphInstantiate(&raw_exec, raw_graph, 0));
@@ -88,6 +87,8 @@ public:
     }
 
 private:
+    // The exec is independent of the graph it was instantiated from, so the
+    // topology is dropped at the end of capture().
     struct GraphDeleter {
         void operator()(cudaGraph_t graph) const noexcept {
             if (graph != nullptr) {
@@ -95,6 +96,8 @@ private:
             }
         }
     };
+    using GraphPtr = std::unique_ptr<std::remove_pointer_t<cudaGraph_t>, GraphDeleter>;
+
     struct GraphExecDeleter {
         void operator()(cudaGraphExec_t exec) const noexcept {
             if (exec != nullptr) {
@@ -103,7 +106,6 @@ private:
         }
     };
 
-    std::unique_ptr<std::remove_pointer_t<cudaGraph_t>, GraphDeleter>         graph_;
     std::unique_ptr<std::remove_pointer_t<cudaGraphExec_t>, GraphExecDeleter> exec_;
 };
 

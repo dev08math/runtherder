@@ -29,10 +29,9 @@ void Generator::generate(SequenceState& seq, std::span<const int> prompt, Output
             ++decode_steps;
         }
 
-        // Capture waits for the second decode step. The first one still misses
-        // the cuBLASLt plan cache at the decode shape, and the heuristic search
-        // that fills it is not capturable. Prefill never captures, its arena
-        // carve depends on the prompt length.
+        // The first decode step misses the cuBLASLt plan cache at the decode
+        // shape, and the heuristic search that fills it is not capturable.
+        // Prefill never captures, its arena carve depends on the prompt length.
         model::Logits out{nullptr, 0};
         if (!enforce_eager_ && decode && decode_steps >= 2) {
             if (!decode_graph_.captured()) {

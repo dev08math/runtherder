@@ -195,7 +195,7 @@ namespace {
 constexpr float kFp8E4M3Max = 448.0f;
 
 // x is indexed by the local row, q and scale by the destination row the write
-// lands at. *at_pos is read once per block.
+// lands at.
 template <int VecsPerThread>
 __global__ void quantize_kv_fp8_kernel(
     __nv_fp8_e4m3* __restrict__       q,

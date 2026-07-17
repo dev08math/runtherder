@@ -21,26 +21,26 @@ namespace runtherder::model::llama3 {
 
 /**
  * @brief Runs one Llama3 forward pass over n tokens. Returns only the last
- *        token's logits, for the caller to sample the next token from.
+ *        token's logits.
  * @param weights       Llama3 weights from arrange().
  * @param config        the loaded model hyperparameters.
  * @param scratch       forward scratch arena, sized by scratch_bytes().
  * @param dev_token_ids device buffer of n token ids.
- * @param positions     [n] device sequence positions, iota from start_pos.
- * @param ctx           engine context (matmul, attention, KV cache).
+ * @param positions     [n] device resident, the sequence position of each token.
+ * @param ctx           engine runtime.
  * @param n             token count, non empty.
  * @param stream        CUDA stream every kernel is launched on.
  * @pre weights arranged by arrange() against config.
  * @note Device work only. Host to device staging belongs to the caller.
  */
-[[nodiscard]] LlamaLogits forward(const LlamaWeights&    weights,
-                                  const LlamaConfig&     config,
-                                  device::ScratchArena&  scratch,
-                                  const int*             dev_token_ids,
-                                  const int*             positions,
-                                  engine::EngineContext& ctx,
-                                  std::size_t            n,
-                                  cudaStream_t           stream = nullptr);
+[[nodiscard]] Logits forward(const LlamaWeights&    weights,
+                             const LlamaConfig&     config,
+                             device::ScratchArena&  scratch,
+                             const int*             dev_token_ids,
+                             const int*             positions,
+                             engine::EngineContext& ctx,
+                             std::size_t            n,
+                             cudaStream_t           stream);
 
 /**
  * @brief Bytes the Llama3 forward scratch arena needs for up to

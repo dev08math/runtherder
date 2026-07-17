@@ -15,8 +15,7 @@
 namespace runtherder::engine {
 
 /**
- * @brief Runtime the engine owns and passes to forward: matmul, attention
- *        backend, KV cache, token budget.
+ * @brief Runtime the engine owns and passes to forward().
  */
 class EngineContext {
 public:
@@ -36,12 +35,12 @@ public:
 
     /**
      * @brief Publishes pos as the decode position every kernel reads this step.
+     * @param pos  position of the token in flight, >= 0
      * @note Synchronous. Illegal inside stream capture, call it before the launch.
      */
     void set_decode_pos(int pos) {
         RUNTHERDER_CHECK(pos >= 0, "decode_pos must be >= 0");
-        host_pos_ = pos;
-        RUNTHERDER_CUDA_CHECK(cudaMemcpy(decode_pos_.get(), &host_pos_, sizeof(int),
+        RUNTHERDER_CUDA_CHECK(cudaMemcpy(decode_pos_.get(), &pos, sizeof(int),
                                          cudaMemcpyHostToDevice));
     }
 
@@ -57,7 +56,6 @@ private:
     std::unique_ptr<attention::AttentionBackend> attention_;
     KVCache                                      kv_cache_;
     device::DeviceUniquePtr<int>                 decode_pos_ = device::make_device_unique<int>(1);
-    int                                          host_pos_   = 0;
 };
 
 }  // namespace runtherder::engine

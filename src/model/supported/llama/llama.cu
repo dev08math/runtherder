@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <string>
@@ -235,18 +236,12 @@ Logits LlamaModel::forward(engine::EngineContext& ctx, cudaStream_t stream) {
     RUNTHERDER_CHECK(staged_n_ >= 1, "forward called before stage");
 
     switch (config_.base().model_type()) {
-        case ModelType::Qwen3: {
-            const LlamaLogits out =
-                qwen3::forward(weights_, config_, scratch_, staging_.get(), positions_.get(),
-                               ctx, staged_n_, stream);
-            return Logits{out.logits, out.vocab_size};
-        }
-        case ModelType::Llama3: {
-            const LlamaLogits out =
-                llama3::forward(weights_, config_, scratch_, staging_.get(), positions_.get(),
-                                ctx, staged_n_, stream);
-            return Logits{out.logits, out.vocab_size};
-        }
+        case ModelType::Qwen3:
+            return qwen3::forward(weights_, config_, scratch_, staging_.get(),
+                                  positions_.get(), ctx, staged_n_, stream);
+        case ModelType::Llama3:
+            return llama3::forward(weights_, config_, scratch_, staging_.get(),
+                                   positions_.get(), ctx, staged_n_, stream);
     }
     RUNTHERDER_CHECK(false, "model not in Llama family");
     return Logits{nullptr, 0};

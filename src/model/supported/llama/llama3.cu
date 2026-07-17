@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <numeric>
 #include <optional>
 #include <string>
 #include <vector>
@@ -159,18 +158,23 @@ std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_token
     return bf16_elems * sizeof(__nv_bfloat16) + w8a8_bytes + kAllocs * kAlign;
 }
 
-LlamaLogits forward(const LlamaWeights&    weights,
-                    const LlamaConfig&     config,
-                    device::ScratchArena&  scratch,
-                    const int*             dev_token_ids,
-                    const int*             positions,
-                    engine::EngineContext& ctx,
-                    std::size_t            n,
-                    cudaStream_t           stream) {
+Logits forward(const LlamaWeights&    weights,
+               const LlamaConfig&     config,
+               device::ScratchArena&  scratch,
+               const int*             dev_token_ids,
+               const int*             positions,
+               engine::EngineContext& ctx,
+               std::size_t            n,
+               cudaStream_t           stream) {
     RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
 
-    // Prefill or decode of n tokens. The projections run W8A8 int8 when the
-    // weight is quantized, there is no q/k norm, and lm_head stays BF16.
+    // Prefill or decode of n tokens at the staged positions.
+    // Embed, then per layer: rmsnorm (fused residual add after layer 0), q/k/v
+    // projections, RoPE, append k/v to the KV cache, attention over the cached
+    // keys, output projection, then the gated MLP (rmsnorm add, gate and up,
+    // SwiGLU, down). A final rmsnorm add, then lm_head on the last token only.
+    // The projections run W8A8 int8 when the weight is quantized, there is no
+    // q/k norm, and lm_head stays BF16.
     const std::size_t hidden_dim = config.base().hidden_dim();
     const std::size_t q_dim      = config.q_dim();
     const std::size_t kv_dim     = config.kv_dim();
@@ -179,7 +183,6 @@ LlamaLogits forward(const LlamaWeights&    weights,
     const int hidden_int = static_cast<int>(hidden_dim);
 
     scratch.reset();
-    const int* ids = dev_token_ids;
 
     const int num_q_heads  = static_cast<int>(config.num_heads());
     const int num_kv_heads = static_cast<int>(config.num_kv_heads());
@@ -201,7 +204,7 @@ LlamaLogits forward(const LlamaWeights&    weights,
     __nv_bfloat16* mlp_out    = scratch.alloc<__nv_bfloat16>(n * hidden_dim);
 
     kernels::embedding_lookup_bf16_forward(
-        hidden, bf16(weights.token_embedding()), ids, n_int, hidden_int, stream);
+        hidden, bf16(weights.token_embedding()), dev_token_ids, n_int, hidden_int, stream);
 
     const int n_max = static_cast<int>(std::max({q_dim, kv_dim, hidden_dim, intermediate_dim}));
     const int k_max = static_cast<int>(std::max({hidden_dim, q_dim, intermediate_dim}));
@@ -265,7 +268,7 @@ LlamaLogits forward(const LlamaWeights&    weights,
     ctx.matmul().linear_bf16(logits, last, bf16(weights.lm_head()),
                              1, vocab_int, hidden_int, stream);
 
-    return LlamaLogits{logits, vocab_int};
+    return Logits{logits, vocab_int};
 }
 
 }  // namespace runtherder::model::llama3

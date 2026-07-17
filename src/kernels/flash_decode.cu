@@ -18,7 +18,7 @@ constexpr int kMaxHeadDim = 1024;
 // over the split's key range, the q.k dot is a shared memory reduction across the
 // block on every key. K and V are E4M3, dequantized by their per (token, kv_head)
 // scale at the load site. Writes the running m / l / acc to scratch instead of
-// dividing. An empty split (num_splits > n_keys) writes the m = -inf, l = 0,
+// dividing. A split starting past the key count writes the m = -inf, l = 0,
 // acc = 0 sentinel the reduce treats as a zero weight contribution.
 __global__ void flash_decode_partial_kernel(
     const __nv_bfloat16* __restrict__ q,
@@ -87,7 +87,7 @@ __global__ void flash_decode_partial_kernel(
 }
 
 // One block per q head. Merges the num_splits partials for that head onto a
-// shared max, then normalizes. Thread d owns lane d, reads across splits.
+// per thread max, then normalizes. Thread d owns lane d, reads across splits.
 __global__ void flash_decode_reduce_kernel(
     __nv_bfloat16* __restrict__ out,
     const float* __restrict__   partial,

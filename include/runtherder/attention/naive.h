@@ -7,6 +7,9 @@
 
 namespace runtherder::attention {
 
+/**
+ * @brief Causal attention, the same kernel at every shape.
+ */
 class NaiveAttention final : public AttentionBackend {
 public:
     explicit NaiveAttention(const AttnConfig& config) noexcept;

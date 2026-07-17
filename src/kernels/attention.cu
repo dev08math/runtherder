@@ -12,7 +12,7 @@ namespace runtherder::kernels {
 
 namespace {
 
-// Bounds the per thread accumulator below and caps head_dim at the launch site.
+// Sizes the per thread accumulator and caps head_dim at the launch site.
 constexpr int kMaxHeadDim = 256;
 
 __device__ float qk_dot(

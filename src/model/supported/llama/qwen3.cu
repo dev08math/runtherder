@@ -1,7 +1,6 @@
 #include <runtherder/model/supported/llama/qwen3.h>
 
 #include <cstddef>
-#include <numeric>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -91,14 +90,14 @@ std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_token
     return bf16_elems * sizeof(__nv_bfloat16) + kAllocs * kAlign;
 }
 
-LlamaLogits forward(const LlamaWeights&    weights,
-                    const LlamaConfig&     config,
-                    device::ScratchArena&  scratch,
-                    const int*             dev_token_ids,
-                    const int*             positions,
-                    engine::EngineContext& ctx,
-                    std::size_t            n,
-                    cudaStream_t           stream) {
+Logits forward(const LlamaWeights&    weights,
+               const LlamaConfig&     config,
+               device::ScratchArena&  scratch,
+               const int*             dev_token_ids,
+               const int*             positions,
+               engine::EngineContext& ctx,
+               std::size_t            n,
+               cudaStream_t           stream) {
     RUNTHERDER_CHECK(n >= 1, "forward needs at least one token");
 
     // Prefill or decode of n tokens at the staged positions.
@@ -114,7 +113,6 @@ LlamaLogits forward(const LlamaWeights&    weights,
     const int hidden_int = static_cast<int>(hidden_dim);
 
     scratch.reset();
-    const int* ids = dev_token_ids;
 
     const int num_q_heads  = static_cast<int>(config.num_heads());
     const int num_kv_heads = static_cast<int>(config.num_kv_heads());
@@ -136,7 +134,7 @@ LlamaLogits forward(const LlamaWeights&    weights,
     __nv_bfloat16* mlp_out    = scratch.alloc<__nv_bfloat16>(n * hidden_dim);
 
     kernels::embedding_lookup_bf16_forward(
-        hidden, bf16(weights.token_embedding()), ids, n_int, hidden_int, stream);
+        hidden, bf16(weights.token_embedding()), dev_token_ids, n_int, hidden_int, stream);
 
     const std::vector<LlamaLayerWeights>& layers = weights.layers();
     for (std::size_t i = 0; i < layers.size(); ++i) {
@@ -203,7 +201,7 @@ LlamaLogits forward(const LlamaWeights&    weights,
     ctx.matmul().linear_bf16(logits, last, bf16(weights.lm_head()),
                              1, vocab_int, hidden_int, stream);
 
-    return LlamaLogits{logits, vocab_int};
+    return Logits{logits, vocab_int};
 }
 
 }  // namespace runtherder::model::qwen3

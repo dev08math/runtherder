@@ -18,8 +18,7 @@ namespace runtherder::engine {
  * @brief Single sequence contiguous KV cache stored as E4M3. K and V slabs are
  *        [num_layers, max_seq_len, num_kv_heads, head_dim]. The parallel scale
  *        slabs are [num_layers, max_seq_len, num_kv_heads], one dequant scale per
- *        (token, kv_head). append takes bf16 and quantizes on the way in, so the
- *        fp8 format never leaves the cache. Caller owns the write position.
+ *        (token, kv_head). Caller owns the write position.
  */
 class KVCache {
 public:
@@ -28,7 +27,6 @@ public:
           max_seq_len_(max_seq_len),
           num_kv_heads_(num_kv_heads),
           head_dim_(head_dim),
-          kv_dim_(num_kv_heads * head_dim),
           layer_stride_(max_seq_len * (num_kv_heads * head_dim)),
           scale_layer_stride_(max_seq_len * num_kv_heads) {
         RUNTHERDER_CHECK(num_layers >= 1,   "KVCache num_layers must be >= 1");
@@ -53,10 +51,13 @@ public:
 
     /**
      * @brief Quantizes n_new bf16 keys and values into layer at row *at_pos.
-     * @param k       [n_new, num_kv_heads, head_dim] bf16
-     * @param v       [n_new, num_kv_heads, head_dim] bf16
+     * @param layer   [0, num_layers)
+     * @param k       [n_new, num_kv_heads, head_dim]
+     * @param v       [n_new, num_kv_heads, head_dim]
+     * @param n_new   keys and values this call appends, >= 1
      * @param at_pos  device resident write position. Unchecked against
      *                max_seq_len, the caller owns that bound.
+     * @param stream  CUDA stream every kernel is launched on.
      */
     void append(int layer, const __nv_bfloat16* k, const __nv_bfloat16* v,
                 int n_new, const int* at_pos, cudaStream_t stream) {
@@ -98,8 +99,7 @@ private:
     int max_seq_len_;
     int num_kv_heads_;
     int head_dim_;
-    int kv_dim_;              // num_kv_heads * head_dim
-    int layer_stride_;        // max_seq_len * kv_dim
+    int layer_stride_;        // max_seq_len * num_kv_heads * head_dim
     int scale_layer_stride_;  // max_seq_len * num_kv_heads
 };
 

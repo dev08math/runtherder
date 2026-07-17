@@ -19,7 +19,7 @@ struct AttnConfig {
 };
 
 /**
- * @brief Attention backend selector.
+ * @brief Interface for one causal attention implementation.
  */
 class AttentionBackend {
 public:
@@ -29,11 +29,15 @@ public:
     AttentionBackend& operator=(const AttentionBackend&) = delete;
 
     /**
-     * @brief Causal attention. out is [n_new, num_q_heads, head_dim].
+     * @brief Causal attention.
+     * @param out        [n_new, num_q_heads, head_dim]
      * @param q          [n_new, num_q_heads, head_dim]
-     * @param kv         cached keys and values, each [cache_len + n_new, num_kv_heads, head_dim]
+     * @param kv         the layer's cache, with the n_new new keys already
+     *                   appended
+     * @param n_new      queries this call attends, >= 1
      * @param cache_len  device resident, the keys already cached before these
      *                   n_new queries.
+     * @param stream     CUDA stream every kernel is launched on.
      */
     virtual void run(__nv_bfloat16*       out,
                      const __nv_bfloat16* q,
