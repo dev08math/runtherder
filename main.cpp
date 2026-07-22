@@ -34,6 +34,27 @@ std::size_t param_count(const runtherder::model::Tensor& t) {
     return n;
 }
 
+// Stamps the first emitted token, the prefill / decode boundary (TTFT).
+class TimingSink final : public runtherder::engine::OutputSink {
+public:
+    void on_token([[maybe_unused]] int seq_id, int token_id) override {
+        if (tokens_.empty()) {
+            first_token_ = std::chrono::steady_clock::now();
+        }
+        tokens_.push_back(token_id);
+    }
+    void flush() override {}
+
+    [[nodiscard]] const std::vector<int>& tokens() const noexcept { return tokens_; }
+    [[nodiscard]] std::chrono::steady_clock::time_point first_token_time() const noexcept {
+        return first_token_;
+    }
+
+private:
+    std::vector<int>                      tokens_;
+    std::chrono::steady_clock::time_point first_token_{};
+};
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -153,22 +174,31 @@ int main(int argc, char** argv) {
     const eng::StopCondition stop{model.config().base().eos_token_ids(), max_new_tokens};
     eng::SequenceState seq = eng::SequenceState::create(0, static_cast<int>(ids.size()), params, stop);
 
-    eng::VectorSink sink;
+    TimingSink      sink;
     eng::Generator  generator(model, ctx, sampler, enforce_eager);
 
     const auto t0 = std::chrono::steady_clock::now();
     generator.generate(seq, ids, sink);
     const auto t1 = std::chrono::steady_clock::now();
 
-    const double elapsed_s =
-        std::chrono::duration<double>(t1 - t0).count();
-    const double tokens_per_s =
-        static_cast<double>(sink.tokens().size()) / elapsed_s;
+    const std::size_t n_gen     = sink.tokens().size();
+    const double      elapsed_s = std::chrono::duration<double>(t1 - t0).count();
+    const double      prefill_s =
+        (n_gen > 0)
+            ? std::chrono::duration<double>(sink.first_token_time() - t0).count()
+            : elapsed_s;
+    const double decode_s = elapsed_s - prefill_s;
+
+    const double prefill_tps = static_cast<double>(ids.size()) / prefill_s;
+    const double decode_tps =
+        (n_gen > 1) ? static_cast<double>(n_gen - 1) / decode_s : 0.0;
+    const double blended_tps = static_cast<double>(n_gen) / elapsed_s;
 
     const std::string completion = tokenizer.decode(sink.tokens());
 
-    std::printf("prompt:        %s\n", prompt.c_str());
-    std::printf("decode:        %s\n", enforce_eager ? "eager" : "cuda graph");
+    std::printf("prompt:        %.60s%s\n", prompt.c_str(),
+                prompt.size() > 60 ? " ..." : "");
+    std::printf("exec mode:     %s\n", enforce_eager ? "eager" : "cuda graph");
     std::printf("sampling:      temperature %.2f, top_p %.2f, top_k %d\n",
                 static_cast<double>(params.temperature),
                 static_cast<double>(params.top_p), params.top_k);
@@ -176,8 +206,12 @@ int main(int argc, char** argv) {
         std::printf("seed:          %u\n", seed_value);
     }
     std::printf("prompt tokens: %zu\n", ids.size());
-    std::printf("generated:     %zu tokens in %.3fs  (%.2f tok/s)\n",
-                sink.tokens().size(), elapsed_s, tokens_per_s);
+    std::printf("prefill:       %zu tokens in %.3fs  (%.1f tok/s, TTFT)\n",
+                ids.size(), prefill_s, prefill_tps);
+    std::printf("decode:        %zu tokens in %.3fs  (%.2f tok/s)\n",
+                (n_gen > 0 ? n_gen - 1 : 0), decode_s, decode_tps);
+    std::printf("generated:     %zu tokens in %.3fs  (%.2f tok/s blended)\n",
+                n_gen, elapsed_s, blended_tps);
     std::printf("completion:    \"%s\"\n", completion.c_str());
 
     return 0;

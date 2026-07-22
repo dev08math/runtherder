@@ -15,8 +15,8 @@ namespace {
 constexpr int kMaxHeadDim = 1024;
 
 // One block per (q head, split), one thread per head_dim lane. Online softmax
-// over the split's key range, the q.k dot is a shared memory reduction across the
-// block on every key. K and V are E4M3, dequantized by their per (token, kv_head)
+// over the split's key range, the q.k dot is a warp shuffle reduction then a
+// small combine across warps, on every key. K and V are E4M3, dequantized by their per (token, kv_head)
 // scale at the load site. Writes the running m / l / acc to scratch instead of
 // dividing. A split starting past the key count writes the m = -inf, l = 0,
 // acc = 0 sentinel the reduce treats as a zero weight contribution.
@@ -33,11 +33,14 @@ __global__ void flash_decode_partial_kernel(
     int                               num_kv_heads,
     int                               head_dim,
     float                             scale) {
-    const int qh     = blockIdx.x;
-    const int si     = blockIdx.y;
-    const int d      = threadIdx.x;
-    const int kvh    = qh / (num_q_heads / num_kv_heads);
-    const int n_keys = *cache_len + 1;
+    const int qh      = blockIdx.x;
+    const int si      = blockIdx.y;
+    const int d       = threadIdx.x;
+    const int lane    = d & 31;
+    const int warp_id = d >> 5;
+    const int n_warps = head_dim >> 5;
+    const int kvh     = qh / (num_q_heads / num_kv_heads);
+    const int n_keys  = *cache_len + 1;
 
     const int chunk = (n_keys + num_splits - 1) / num_splits;
     const int start = si * chunk;
@@ -58,15 +61,19 @@ __global__ void flash_decode_partial_kernel(
         const float               ks    = k_scale[row];
         const float               vs    = v_scale[row];
 
-        red[d] = q_d * dequantize_kv_fp8(k_row[d], ks);
-        __syncthreads();
-        for (int stride = head_dim / 2; stride > 0; stride >>= 1) {
-            if (d < stride) {
-                red[d] += red[d + stride];
-            }
-            __syncthreads();
+        float p = q_d * dequantize_kv_fp8(k_row[d], ks);
+        for (int off = 16; off > 0; off >>= 1) {
+            p += __shfl_down_sync(0xffffffffu, p, off);
         }
-        const float s = red[0] * scale;
+        if (lane == 0) {
+            red[warp_id] = p;
+        }
+        __syncthreads();
+        float dot = 0.0f;
+        for (int w = 0; w < n_warps; ++w) {
+            dot += red[w];
+        }
+        const float s = dot * scale;
         __syncthreads();
 
         const float m_new = fmaxf(m, s);
@@ -142,9 +149,10 @@ void flash_decode_split_bf16(
     RUNTHERDER_CHECK(head_dim <= kMaxHeadDim, "head_dim exceeds kMaxHeadDim (1024)");
     RUNTHERDER_CHECK((head_dim & (head_dim - 1)) == 0,
                      "head_dim must be a power of two");
+    RUNTHERDER_CHECK(head_dim % 32 == 0, "head_dim must be a multiple of 32");
 
     const int         block = head_dim;
-    const std::size_t shmem = static_cast<std::size_t>(head_dim) * sizeof(float);
+    const std::size_t shmem = static_cast<std::size_t>(head_dim / 32) * sizeof(float);
 
     const dim3 partial_grid(static_cast<unsigned int>(num_q_heads),
                             static_cast<unsigned int>(num_splits));

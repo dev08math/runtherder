@@ -4,14 +4,13 @@
 #include <cuda_runtime.h>
 
 #include <runtherder/attention/backend.h>
-#include <runtherder/attention/naive.h>
 #include <runtherder/device/memory.cuh>
 
 namespace runtherder::attention {
 
 /**
- * @brief Selects the attention kernel from the token count: prefill for
- *        n_new > 1, split flash decode for n_new == 1.
+ * @brief Selects the attention kernel from the token count: tensor core flash
+ *        prefill for n_new > 1, split flash decode for n_new == 1.
  */
 class AdaptiveAttention final : public AttentionBackend {
 public:
@@ -26,7 +25,6 @@ public:
 
 private:
     AttnConfig                     config_;
-    NaiveAttention                 prefill_;
     device::DeviceUniquePtr<float> partial_;  // split decode reduction scratch
 };
 

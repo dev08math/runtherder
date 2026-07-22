@@ -40,6 +40,7 @@ add_library(runtherder_kernels STATIC
     src/kernels/embedding.cu
     src/kernels/attention.cu
     src/kernels/flash_decode.cu
+    src/kernels/flash_prefill.cu
     src/kernels/quantization.cu
 )
 set_target_properties(runtherder_kernels PROPERTIES

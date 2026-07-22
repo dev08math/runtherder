@@ -1,19 +1,21 @@
 #include <runtherder/attention/adaptive.h>
 
 #include <runtherder/kernels/flash_decode.cuh>
+#include <runtherder/kernels/flash_prefill.cuh>
 
 namespace runtherder::attention {
 
 namespace {
 
-// cache_len is device resident, the host cannot size this per step.
-constexpr int kMaxSplits = 8;
+// cache_len is device resident, the host cannot size this per step, so the
+// split count is fixed and each split derives its key range on device. Higher
+// gives long context decode more parallelism, empty splits stay cheap at short.
+constexpr int kMaxSplits = 32;
 
 }  // namespace
 
 AdaptiveAttention::AdaptiveAttention(const AttnConfig& config)
     : config_(config),
-      prefill_(config),
       partial_(device::make_device_unique<float>(kernels::flash_split_scratch_floats(
           config.num_q_heads, config.head_dim, kMaxSplits))) {}
 
@@ -32,7 +34,10 @@ void AdaptiveAttention::run(
         return;
     }
 
-    prefill_.run(out, q, kv, n_new, cache_len, stream);
+    kernels::flash_prefill_bf16(
+        out, q, kv.k, kv.v, kv.k_scale, kv.v_scale, n_new, cache_len,
+        config_.num_q_heads, config_.num_kv_heads, config_.head_dim,
+        config_.scale, stream);
 }
 
 }  // namespace runtherder::attention
