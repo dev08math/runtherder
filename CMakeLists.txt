@@ -86,6 +86,7 @@ target_link_libraries(runtherder PRIVATE
     runtherder_attention
     runtherder_sampling
     runtherder_tokenizer
+    CLI11::CLI11
 )
 
 include(FetchContent)
@@ -106,6 +107,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tokenizers_cpp)
 
+FetchContent_Declare(
+    cli11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG        v2.6.2
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(cli11)
+
 add_library(runtherder_tokenizer STATIC
     src/tokenizer/tokenizer.cpp
 )
@@ -122,6 +131,7 @@ add_library(runtherder_model STATIC
     src/model/safetensors.cpp
     src/model/sharded_safetensors.cpp
     src/model/config.cpp
+    src/model/generation_config.cpp
     src/model/upload.cu
     src/model/supported/llama/llama.cu
     src/model/supported/llama/qwen3.cu
