@@ -39,10 +39,8 @@ namespace runtherder::kernels {
  *                    is correct at any *cache_len.
  * @param cache_len   device resident, the keys cached before this query. Attends
  *                    *cache_len + 1 keys. Unchecked at the launch site.
- * @note head_dim maps to block threads, must be a power of two, capped at the
- *       launch site. Output is the online softmax result. The split reassociates
- *       the float accumulation and can differ from a serial accumulation in the
- *       last bits, not in value.
+ * @note The split reassociates the float accumulation and can differ from a
+ *       serial accumulation in the last bits, not in value.
  */
 void flash_decode_split_bf16(
     __nv_bfloat16*       out,

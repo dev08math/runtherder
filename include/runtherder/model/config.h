@@ -12,8 +12,8 @@ enum class ModelType {
 };
 
 /**
- * @brief Universal hyperparameters every LLM carries. Family specific
- *        extensions live in their family's own config under supported/.
+ * @brief Universal hyperparameters every LLM carries. Architecture specific
+ *        extensions live in their own config under supported/.
  */
 class Config {
 public:

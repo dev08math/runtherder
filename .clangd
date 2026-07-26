@@ -13,8 +13,19 @@ CompileFlags:
     - --options-file
     - -Xcompiler*
     - -Xcudafe*
+    - -Xptxas*
+    - --Wreorder
+    - -Werror=all-warnings
+    - -lineinfo
 
 Diagnostics:
   Suppress:
     - drv_unknown_argument
     - deduction_guide_target_attr
+
+---
+If:
+  PathMatch: .*/_deps/.*
+
+Index:
+  Background: Skip

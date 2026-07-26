@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <numeric>
 #include <optional>
 #include <span>
@@ -167,6 +168,38 @@ const __nv_bfloat16* bf16(const Tensor& t) {
     return reinterpret_cast<const __nv_bfloat16*>(t.data.data());
 }
 
+bool has_quantized_weights(const LlamaWeights& weights) {
+    for (const LlamaLayerWeights& layer : weights.layers()) {
+        const bool quantized =
+            !is_float_dtype(layer.wq.dtype) || !is_float_dtype(layer.wk.dtype) ||
+            !is_float_dtype(layer.wv.dtype) || !is_float_dtype(layer.wo.dtype) ||
+            !is_float_dtype(layer.w_gate.dtype) || !is_float_dtype(layer.w_up.dtype) ||
+            !is_float_dtype(layer.w_down.dtype);
+        if (quantized) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void linear(kernels::Matmul&           matmul,
+            const kernels::W8A8Buffer& w8,
+            __nv_bfloat16*             y,
+            const __nv_bfloat16*       x,
+            const Tensor&              w,
+            int                        m,
+            int                        n,
+            int                        k,
+            cudaStream_t               stream) {
+    if (is_float_dtype(w.dtype)) {
+        matmul.linear_bf16(y, x, bf16(w), m, n, k, stream);
+        return;
+    }
+    const auto* weight  = reinterpret_cast<const std::int8_t*>(w.data.data());
+    const auto* w_scale = reinterpret_cast<const __nv_bfloat16*>(w.quant->scales.data());
+    matmul.linear_w8a8(y, x, weight, w_scale, w8, m, n, k, stream);
+}
+
 LlamaWeights LlamaWeights::load(const ShardedSafetensors& reader, const LlamaConfig& config) {
     switch (config.base().model_type()) {
         case ModelType::Qwen3:
@@ -174,18 +207,21 @@ LlamaWeights LlamaWeights::load(const ShardedSafetensors& reader, const LlamaCon
         case ModelType::Llama3:
             return llama3::arrange(upload_all(reader), config);
     }
-    RUNTHERDER_CHECK(false, "model not in Llama family");
+    RUNTHERDER_CHECK(false, "model_type is not a Llama style architecture");
     return LlamaWeights{};
 }
 
-std::size_t llama_scratch_bytes(const LlamaConfig& config, std::size_t max_batch_tokens) {
+std::size_t llama_scratch_bytes(const LlamaConfig&  config,
+                                const LlamaWeights& weights,
+                                std::size_t         max_batch_tokens) {
+    const bool quantized = has_quantized_weights(weights);
     switch (config.base().model_type()) {
         case ModelType::Qwen3:
-            return qwen3::scratch_bytes(config, max_batch_tokens);
+            return qwen3::scratch_bytes(config, max_batch_tokens, quantized);
         case ModelType::Llama3:
-            return llama3::scratch_bytes(config, max_batch_tokens);
+            return llama3::scratch_bytes(config, max_batch_tokens, quantized);
     }
-    RUNTHERDER_CHECK(false, "model not in Llama family");
+    RUNTHERDER_CHECK(false, "model_type is not a Llama style architecture");
     return 0;
 }
 
@@ -193,7 +229,7 @@ LlamaModel::LlamaModel(LlamaConfig config, LlamaWeights weights, std::size_t max
     : config_(std::move(config)),
       weights_(std::move(weights)),
       max_batch_tokens_(max_batch_tokens),
-      scratch_(llama_scratch_bytes(config_, max_batch_tokens)),
+      scratch_(llama_scratch_bytes(config_, weights_, max_batch_tokens)),
       staging_(device::make_device_unique<int>(max_batch_tokens)),
       positions_(device::make_device_unique<int>(max_batch_tokens)) {
     RUNTHERDER_CHECK(max_batch_tokens_ >= 1, "max_batch_tokens must be >= 1");
@@ -243,7 +279,7 @@ Logits LlamaModel::forward(engine::EngineContext& ctx, cudaStream_t stream) {
             return llama3::forward(weights_, config_, scratch_, staging_.get(),
                                    positions_.get(), ctx, staged_n_, stream);
     }
-    RUNTHERDER_CHECK(false, "model not in Llama family");
+    RUNTHERDER_CHECK(false, "model_type is not a Llama style architecture");
     return Logits{nullptr, 0};
 }
 

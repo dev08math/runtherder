@@ -18,6 +18,10 @@ namespace runtherder::kernels {
  * @param v_scale   [cache_len + n_new, num_kv_heads] per (token, kv_head) dequant
  * @param cache_len device resident, the keys cached before these n_new queries.
  *                  Unchecked at the launch site.
+ * @note Operands narrow to fp16 before the mma, so bf16 range collapses to
+ *       magnitudes in [6.1e-5, 65504] and anything outside flushes or saturates.
+ *       Accumulation and softmax stay fp32. E4M3 KV caps at 448 and cannot
+ *       saturate. The sm_89 bf16 mma is the alternative not taken.
  */
 void flash_prefill_bf16(
     __nv_bfloat16*       out,

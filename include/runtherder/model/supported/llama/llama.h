@@ -14,6 +14,7 @@
 #include <runtherder/device/memory.cuh>
 #include <runtherder/device/scratch_arena.cuh>
 #include <runtherder/engine/context.h>
+#include <runtherder/kernels/matmul.cuh>
 #include <runtherder/model/architecture.h>
 #include <runtherder/model/config.h>
 #include <runtherder/model/sharded_safetensors.h>
@@ -35,8 +36,10 @@ struct RopeScaling {
 };
 
 /**
- * @brief Hyperparameters of one Llama family model. Composes the universal
- *        Config with family specific fields.
+ * @brief Hyperparameters of one Llama style model. Composes the universal
+ *        Config with architecture specific fields.
+ * @note The Llama prefix names the architecture shape, not the lineage. Qwen3
+ *       loads through here and is not a Llama descendant.
  * @note rope_scaling is set only when config.json carries a rope_scaling block,
  *       and stays nullopt otherwise.
  */
@@ -86,7 +89,7 @@ private:
 };
 
 /**
- * @brief Weights of one transformer block in the Llama family layout: the
+ * @brief Weights of one transformer block in the Llama style layout: the
  *        attention and FFN norms, the Q/K/V/O projections, and the gate/up/down
  *        MLP projections.
  * @note q_norm and k_norm are populated only by architectures that carry them,
@@ -111,15 +114,15 @@ struct LlamaLayerWeights {
 };
 
 /**
- * @brief Loaded weights for one Llama family model. Immutable after load().
+ * @brief Loaded weights for one Llama style model. Immutable after load().
  */
 class LlamaWeights {
 public:
     /**
      * @brief Dispatches on config.base().model_type() to the right per model
-     *        loader within the family.
-     * @note Fails accordingly on a model not in the family, or weights that do
-     *       not match the config.
+     *        loader for that architecture.
+     * @note Fails accordingly on an architecture outside the Llama style set,
+     *       or weights that do not match the config.
      */
     [[nodiscard]] static LlamaWeights load(const ShardedSafetensors& reader,
                                            const LlamaConfig& config);
@@ -172,6 +175,32 @@ private:
 [[nodiscard]] const __nv_bfloat16* bf16(const Tensor& t);
 
 /**
+ * @brief y = x.Wt, taking the int8 path when w has an integer dtype and the
+ *        bf16 path otherwise.
+ * @param w   weight [n, k]. An integer dtype requires w.quant populated.
+ * @param w8  int8 staging carved from the forward scratch. Untouched on the
+ *            bf16 path, so a caller with only bf16 weights may pass anything.
+ * @param m   rows of x
+ * @param n   rows of w
+ * @param k   shared inner dimension
+ */
+/**
+ * @brief True when any projection weight carries an integer dtype, meaning the
+ *        forward takes the int8 path and needs the W8A8 staging reserved.
+ */
+[[nodiscard]] bool has_quantized_weights(const LlamaWeights& weights);
+
+void linear(kernels::Matmul&           matmul,
+            const kernels::W8A8Buffer& w8,
+            __nv_bfloat16*             y,
+            const __nv_bfloat16*       x,
+            const Tensor&              w,
+            int                        m,
+            int                        n,
+            int                        k,
+            cudaStream_t               stream);
+
+/**
  * @brief RoPE inverse frequency table for the plain (unscaled) rotation,
  *        entry i = theta_base^(-2i / head_dim) for i in [0, head_dim / 2).
  * @pre head_dim even and >= 2, theta_base > 0.
@@ -184,13 +213,17 @@ private:
  * @brief Bytes the forward scratch arena needs for up to max_batch_tokens
  *        tokens. Dispatches on model_type to the per architecture sizing.
  * @param config           the loaded model hyperparameters.
+ * @param weights          the loaded weights, read for their dtypes only.
  * @param max_batch_tokens most tokens a single forward pass will hold.
+ * @note The W8A8 staging is reserved only when weights are quantized. A forward
+ *       that carves it against bf16 weights overruns the arena.
  */
-[[nodiscard]] std::size_t llama_scratch_bytes(const LlamaConfig& config,
-                                              std::size_t        max_batch_tokens);
+[[nodiscard]] std::size_t llama_scratch_bytes(const LlamaConfig&  config,
+                                              const LlamaWeights& weights,
+                                              std::size_t         max_batch_tokens);
 
 /**
- * @brief Llama family implementation of the ModelArchitecture interface. Owns
+ * @brief Llama style implementation of the ModelArchitecture interface. Owns
  *        its forward scratch, token staging, and position staging, all sized for
  *        max_batch_tokens.
  * @note stage() fails if the token count exceeds max_batch_tokens.

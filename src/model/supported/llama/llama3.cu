@@ -59,24 +59,6 @@ std::vector<float> rope_inv_freq_llama3(std::size_t        head_dim,
     return inv_freq;
 }
 
-void linear(kernels::Matmul&           matmul,
-            const kernels::W8A8Buffer& w8,
-            __nv_bfloat16*             y,
-            const __nv_bfloat16*       x,
-            const Tensor&              w,
-            int                        m,
-            int                        n,
-            int                        k,
-            cudaStream_t               stream) {
-    if (is_float_dtype(w.dtype)) {
-        matmul.linear_bf16(y, x, bf16(w), m, n, k, stream);
-        return;
-    }
-    const auto* weight  = reinterpret_cast<const std::int8_t*>(w.data.data());
-    const auto* w_scale = reinterpret_cast<const __nv_bfloat16*>(w.quant->scales.data());
-    matmul.linear_w8a8(y, x, weight, w_scale, w8, m, n, k, stream);
-}
-
 }  // namespace
 
 LlamaWeights arrange(Uploaded uploaded, const LlamaConfig& config) {
@@ -134,7 +116,8 @@ LlamaWeights arrange(Uploaded uploaded, const LlamaConfig& config) {
     };
 }
 
-std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_tokens) {
+std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_tokens,
+                          bool quantized) {
     const std::size_t n                = max_batch_tokens;
     const std::size_t hidden_dim       = config.base().hidden_dim();
     const std::size_t q_dim            = config.q_dim();
@@ -142,20 +125,27 @@ std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_token
     const std::size_t intermediate_dim = config.intermediate_dim();
     const std::size_t vocab            = config.base().vocab_size();
 
-    constexpr std::size_t kAlign  = 256;
-    constexpr std::size_t kAllocs = 15;
+    constexpr std::size_t kAlign      = 256;
+    constexpr std::size_t kAllocs     = 12;
+    constexpr std::size_t kW8A8Allocs = 3;
 
     const std::size_t bf16_elems =
         n * (5 * hidden_dim + 2 * q_dim + 2 * kv_dim + 2 * intermediate_dim) + vocab;
 
-    const std::size_t n_max = std::max({q_dim, kv_dim, hidden_dim, intermediate_dim});
-    const std::size_t k_max = std::max({hidden_dim, q_dim, intermediate_dim});
+    std::size_t w8a8_bytes  = 0;
+    std::size_t w8a8_allocs = 0;
+    if (quantized) {
+        const std::size_t n_max = std::max({q_dim, kv_dim, hidden_dim, intermediate_dim});
+        const std::size_t k_max = std::max({hidden_dim, q_dim, intermediate_dim});
 
-    const std::size_t w8a8_bytes = n * k_max * sizeof(std::int8_t) +
-                                   n * sizeof(float) +
-                                   n * n_max * sizeof(std::int32_t);
+        w8a8_bytes = n * k_max * sizeof(std::int8_t) +
+                     n * sizeof(float) +
+                     n * n_max * sizeof(std::int32_t);
+        w8a8_allocs = kW8A8Allocs;
+    }
 
-    return bf16_elems * sizeof(__nv_bfloat16) + w8a8_bytes + kAllocs * kAlign;
+    return bf16_elems * sizeof(__nv_bfloat16) + w8a8_bytes +
+           (kAllocs + w8a8_allocs) * kAlign;
 }
 
 Logits forward(const LlamaWeights&    weights,
@@ -206,9 +196,13 @@ Logits forward(const LlamaWeights&    weights,
     kernels::embedding_lookup_bf16_forward(
         hidden, bf16(weights.token_embedding()), dev_token_ids, n_int, hidden_int, stream);
 
-    const int n_max = static_cast<int>(std::max({q_dim, kv_dim, hidden_dim, intermediate_dim}));
-    const int k_max = static_cast<int>(std::max({hidden_dim, q_dim, intermediate_dim}));
-    const kernels::W8A8Buffer w8 = kernels::W8A8Buffer::from_arena(scratch, n_int, n_max, k_max);
+    kernels::W8A8Buffer w8{};
+    if (has_quantized_weights(weights)) {
+        const int n_max =
+            static_cast<int>(std::max({q_dim, kv_dim, hidden_dim, intermediate_dim}));
+        const int k_max = static_cast<int>(std::max({hidden_dim, q_dim, intermediate_dim}));
+        w8 = kernels::W8A8Buffer::from_arena(scratch, n_int, n_max, k_max);
+    }
 
     const std::vector<LlamaLayerWeights>& layers = weights.layers();
     for (std::size_t i = 0; i < layers.size(); ++i) {

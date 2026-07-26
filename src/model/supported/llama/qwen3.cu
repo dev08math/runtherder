@@ -1,6 +1,8 @@
 #include <runtherder/model/supported/llama/qwen3.h>
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,6 +17,7 @@
 #include <runtherder/device/check.cuh>
 #include <runtherder/kernels/activation.cuh>
 #include <runtherder/kernels/embedding.cuh>
+#include <runtherder/kernels/matmul.cuh>
 #include <runtherder/kernels/rmsnorm.cuh>
 #include <runtherder/kernels/rope.cuh>
 
@@ -73,7 +76,8 @@ LlamaWeights arrange(Uploaded uploaded, const LlamaConfig& config) {
     };
 }
 
-std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_tokens) {
+std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_tokens,
+                          bool quantized) {
     const std::size_t n                = max_batch_tokens;
     const std::size_t hidden_dim       = config.base().hidden_dim();
     const std::size_t q_dim            = config.q_dim();
@@ -81,13 +85,27 @@ std::size_t scratch_bytes(const LlamaConfig& config, std::size_t max_batch_token
     const std::size_t intermediate_dim = config.intermediate_dim();
     const std::size_t vocab            = config.base().vocab_size();
 
-    constexpr std::size_t kAlign  = 256;
-    constexpr std::size_t kAllocs = 12;
+    constexpr std::size_t kAlign      = 256;
+    constexpr std::size_t kAllocs     = 12;
+    constexpr std::size_t kW8A8Allocs = 3;
 
     const std::size_t bf16_elems =
         n * (5 * hidden_dim + 2 * q_dim + 2 * kv_dim + 2 * intermediate_dim) + vocab;
 
-    return bf16_elems * sizeof(__nv_bfloat16) + kAllocs * kAlign;
+    std::size_t w8a8_bytes  = 0;
+    std::size_t w8a8_allocs = 0;
+    if (quantized) {
+        const std::size_t n_max = std::max({q_dim, kv_dim, hidden_dim, intermediate_dim});
+        const std::size_t k_max = std::max({hidden_dim, q_dim, intermediate_dim});
+
+        w8a8_bytes = n * k_max * sizeof(std::int8_t) +
+                     n * sizeof(float) +
+                     n * n_max * sizeof(std::int32_t);
+        w8a8_allocs = kW8A8Allocs;
+    }
+
+    return bf16_elems * sizeof(__nv_bfloat16) + w8a8_bytes +
+           (kAllocs + w8a8_allocs) * kAlign;
 }
 
 Logits forward(const LlamaWeights&    weights,
@@ -105,6 +123,8 @@ Logits forward(const LlamaWeights&    weights,
     // projections, q/k norm, RoPE, append k/v to the KV cache, attention over the
     // cached keys, output projection, then the gated MLP (rmsnorm add, gate and up,
     // SwiGLU, down). A final rmsnorm add, then lm_head on the last token only.
+    // The projections run W8A8 int8 when the weight is quantized, and lm_head
+    // stays BF16.
     const std::size_t hidden_dim = config.base().hidden_dim();
     const std::size_t q_dim      = config.q_dim();
     const std::size_t kv_dim     = config.kv_dim();
@@ -133,6 +153,15 @@ Logits forward(const LlamaWeights&    weights,
     __nv_bfloat16* up         = scratch.alloc<__nv_bfloat16>(n * intermediate_dim);
     __nv_bfloat16* mlp_out    = scratch.alloc<__nv_bfloat16>(n * hidden_dim);
 
+    // Carve only when scratch_bytes reserved it. Both sides read the same weights.
+    kernels::W8A8Buffer w8{};
+    if (has_quantized_weights(weights)) {
+        const int n_max =
+            static_cast<int>(std::max({q_dim, kv_dim, hidden_dim, intermediate_dim}));
+        const int k_max = static_cast<int>(std::max({hidden_dim, q_dim, intermediate_dim}));
+        w8 = kernels::W8A8Buffer::from_arena(scratch, n_int, n_max, k_max);
+    }
+
     kernels::embedding_lookup_bf16_forward(
         hidden, bf16(weights.token_embedding()), dev_token_ids, n_int, hidden_int, stream);
 
@@ -150,12 +179,12 @@ Logits forward(const LlamaWeights&    weights,
                 n_int, hidden_int, config.rms_norm_eps(), stream);
         }
 
-        ctx.matmul().linear_bf16(q, normed, bf16(layer.wq),
-                                 n_int, static_cast<int>(q_dim), hidden_int, stream);
-        ctx.matmul().linear_bf16(k, normed, bf16(layer.wk),
-                                 n_int, static_cast<int>(kv_dim), hidden_int, stream);
-        ctx.matmul().linear_bf16(v, normed, bf16(layer.wv),
-                                 n_int, static_cast<int>(kv_dim), hidden_int, stream);
+        linear(ctx.matmul(), w8, q, normed, layer.wq,
+               n_int, static_cast<int>(q_dim), hidden_int, stream);
+        linear(ctx.matmul(), w8, k, normed, layer.wk,
+               n_int, static_cast<int>(kv_dim), hidden_int, stream);
+        linear(ctx.matmul(), w8, v, normed, layer.wv,
+               n_int, static_cast<int>(kv_dim), hidden_int, stream);
 
         kernels::rmsnorm_bf16_forward(
             q, q, bf16(*layer.q_norm), n_int * num_q_heads, head_dim,
@@ -172,22 +201,22 @@ Logits forward(const LlamaWeights&    weights,
         const attention::KVView kv = ctx.kv_cache().view(static_cast<int>(i));
         ctx.attention().run(attn, q, kv, n_int, ctx.decode_pos(), stream);
 
-        ctx.matmul().linear_bf16(attn_proj, attn, bf16(layer.wo),
-                                 n_int, hidden_int, static_cast<int>(q_dim), stream);
+        linear(ctx.matmul(), w8, attn_proj, attn, layer.wo,
+               n_int, hidden_int, static_cast<int>(q_dim), stream);
 
         kernels::rmsnorm_add_bf16_forward(
             ffn_normed, hidden, attn_proj, hidden, bf16(layer.ffn_norm),
             n_int, hidden_int, config.rms_norm_eps(), stream);
 
-        ctx.matmul().linear_bf16(gate, ffn_normed, bf16(layer.w_gate),
-                                 n_int, inter_int, hidden_int, stream);
-        ctx.matmul().linear_bf16(up, ffn_normed, bf16(layer.w_up),
-                                 n_int, inter_int, hidden_int, stream);
+        linear(ctx.matmul(), w8, gate, ffn_normed, layer.w_gate,
+               n_int, inter_int, hidden_int, stream);
+        linear(ctx.matmul(), w8, up, ffn_normed, layer.w_up,
+               n_int, inter_int, hidden_int, stream);
 
         kernels::swiglu_bf16_forward(gate, gate, up, n_int * inter_int, stream);
 
-        ctx.matmul().linear_bf16(mlp_out, gate, bf16(layer.w_down),
-                                 n_int, hidden_int, inter_int, stream);
+        linear(ctx.matmul(), w8, mlp_out, gate, layer.w_down,
+               n_int, hidden_int, inter_int, stream);
     }
 
     kernels::rmsnorm_add_bf16_forward(

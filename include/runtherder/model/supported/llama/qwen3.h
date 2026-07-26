@@ -47,8 +47,11 @@ namespace runtherder::model::qwen3 {
  *        max_batch_tokens tokens.
  * @param config           the loaded model hyperparameters.
  * @param max_batch_tokens most tokens a single forward pass will hold.
+ * @param quantized        reserves the W8A8 staging. Must match what forward()
+ *                         derives from the same weights, or the arena overruns.
  */
 [[nodiscard]] std::size_t scratch_bytes(const LlamaConfig& config,
-                                        std::size_t        max_batch_tokens);
+                                        std::size_t        max_batch_tokens,
+                                        bool               quantized);
 
 }  // namespace runtherder::model::qwen3

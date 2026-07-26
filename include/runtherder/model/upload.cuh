@@ -28,7 +28,7 @@ struct Uploaded {
  * @brief Copies every tensor in reader into a single device slab.
  * @param reader the opened safetensors shards to upload.
  * @note Architecture aware arrangement of the returned by_name into typed
- *       weights lives in each family's own loader.
+ *       weights lives in each architecture's own loader.
  */
 [[nodiscard]] Uploaded upload_all(const ShardedSafetensors& reader);
 

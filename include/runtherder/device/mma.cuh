@@ -12,39 +12,24 @@ inline constexpr int kMmaK = 16;
 
 /**
  * @brief 'A' operand of the m16n8k16 mma, a 16x16 row major fp16 tile scattered
- *        across the warp. get_row/get_col map (lane, element) to the (row, col)
- *        that element holds, the distribution the instruction mandates.
+ *        across the warp. Populated by ldmatrix, never by hand.
  */
 struct FragmentA {
     static constexpr int kElements = 8;
     static constexpr int kRegs     = 4;
 
     std::uint32_t reg[kRegs];  // two packed fp16 per register
-
-    [[nodiscard]] static __device__ __forceinline__ int get_row(int lane, int i) {
-        return (lane >> 2) + 8 * ((i >> 1) & 1);
-    }
-    [[nodiscard]] static __device__ __forceinline__ int get_col(int lane, int i) {
-        return (lane & 3) * 2 + (i & 1) + 8 * (i >> 2);
-    }
 };
 
 /**
  * @brief 'B' operand of the m16n8k16 mma, a 16x8 col major fp16 tile scattered
- *        across the warp.
+ *        across the warp. Populated by ldmatrix, never by hand.
  */
 struct FragmentB {
     static constexpr int kElements = 4;
     static constexpr int kRegs     = 2;
 
     std::uint32_t reg[kRegs];  // two packed fp16 per register
-
-    [[nodiscard]] static __device__ __forceinline__ int get_row(int lane, int i) {
-        return (lane & 3) * 2 + (i & 1) + 8 * (i >> 1);
-    }
-    [[nodiscard]] static __device__ __forceinline__ int get_col(int lane, int i) {
-        return lane >> 2;
-    }
 };
 
 /**
