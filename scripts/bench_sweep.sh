@@ -18,7 +18,7 @@ for rep in "${REPEATS[@]}"; do
     python3 -c "import sys; sys.stdout.write('${PARA}' * ${rep})" > "$PROMPT_FILE"
     ptok=""; pf_sum=0; dc_sum=0; ttft_sum=0; n=0
     for r in $(seq 1 "$RUNS"); do
-        out="$("$BIN" "$MODEL" --temp 0.0 "$(cat "$PROMPT_FILE")" 2>/dev/null)"
+        out="$("$BIN" "$MODEL" --temperature 0.0 "$(cat "$PROMPT_FILE")" 2>/dev/null)"
         ptok="$(printf '%s' "$out"  | grep -oP 'prompt tokens:\s*\K[0-9]+')"
         pf="$(printf '%s' "$out"    | grep -oP 'prefill:.*\(\K[0-9.]+')"
         ttft="$(printf '%s' "$out"  | grep -oP 'prefill:\s*[0-9]+ tokens in \K[0-9.]+')"
