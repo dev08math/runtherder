@@ -32,6 +32,8 @@ models/
 *.sqlite
 *.qdrep
 
+bench/
+
 .vscode/
 .cache/
 

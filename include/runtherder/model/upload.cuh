@@ -29,6 +29,9 @@ struct Uploaded {
  * @param reader the opened safetensors shards to upload.
  * @note Architecture aware arrangement of the returned by_name into typed
  *       weights lives in each architecture's own loader.
+ * @note Tensors with identical bytes share one region, so two names in by_name may
+ *       span the same memory. Nothing writes through a Tensor, so the sharing is
+ *       invisible to callers.
  */
 [[nodiscard]] Uploaded upload_all(const ShardedSafetensors& reader);
 

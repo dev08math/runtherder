@@ -1,0 +1,5 @@
+# Lint config for the benchmark scripts. Runtime dependencies live in each
+# script's inline metadata block, so uv run works from any directory.
+[tool.ruff]
+line-length = 100
+target-version = "py312"
