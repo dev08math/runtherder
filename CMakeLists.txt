@@ -57,6 +57,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cli11)
 
+# Jinja for chat templates. Populated but not added: minja is header only and its
+# own CMake pulls a test suite and a second nlohmann copy.
+FetchContent_Declare(
+    minja
+    GIT_REPOSITORY https://github.com/google/minja.git
+    GIT_TAG        021c2293c187789ef13d56c6cfd89c9b134fd80f
+)
+FetchContent_Populate(minja)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_library(runtherder_headers INTERFACE)
@@ -124,13 +133,15 @@ target_link_libraries(runtherder_sampling
 
 add_library(runtherder_tokenizer STATIC
     src/tokenizer/tokenizer.cpp
+    src/tokenizer/chat_template.cpp
 )
 set_target_properties(runtherder_tokenizer PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
+target_include_directories(runtherder_tokenizer SYSTEM PRIVATE ${minja_SOURCE_DIR}/include)
 target_link_libraries(runtherder_tokenizer
     PUBLIC  runtherder_headers tokenizers_cpp
-    PRIVATE runtherder_warnings
+    PRIVATE runtherder_warnings nlohmann_json::nlohmann_json
 )
 
 add_library(runtherder_model STATIC

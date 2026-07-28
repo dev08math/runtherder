@@ -14,6 +14,7 @@ llama.cpp.
 - Custom flash attention kernels for both prefill and decode.
 - CUDA graphs on the decode path.
 - Sampling runs on the GPU: greedy, top k, top p.
+- Interactive chat that applies the checkpoint's own Jinja chat template.
 - Streaming output, and a server mode that keeps the model loaded.
 
 ## Performance
@@ -25,7 +26,7 @@ llama.cpp.
 | OS | Windows 11, WSL2, Ubuntu 22.04 |
 | CUDA | 13.2 |
 | Model | Llama-3.2-3B-Instruct, INT8 W8A8 with a BF16 output head |
-| Compared against | llama.cpp, same model at Q8_0 |
+| Compared against | llama.cpp `ff067f76d` (b10133), same model at Q8_0 |
 | Generation | 128 tokens per run, greedy |
 | Method | stock clocks, medians, Release build, warmed up |
 
@@ -47,15 +48,15 @@ Prefill, one row per prompt length:
 
 Decode, at matched context depth:
 
-| context depth | decode tok/s | llama.cpp | ratio | memory bandwidth |
+| context depth | decode tok/s | llama.cpp | ratio | effective bandwidth |
 |---|---|---|---|---|
-| 35 | 61.67 | 68.25 | 0.90x | 87.1% |
-| 511 | 62.14 | 66.68 | 0.93x | 88.4% |
-| 2041 | 60.38 | 64.05 | 0.94x | 88.0% |
-| 8196 | 54.04 | 54.66 | 0.99x | 86.5% |
+| 35 | 61.67 | 68.25 | 0.90x | 222.9 GB/s (87.1%) |
+| 511 | 62.14 | 66.68 | 0.93x | 226.3 GB/s (88.4%) |
+| 2041 | 60.38 | 64.05 | 0.94x | 225.4 GB/s (88.0%) |
+| 8196 | 54.04 | 54.66 | 0.99x | 221.4 GB/s (86.5%) |
 
 Decode is bound by memory bandwidth and sustains a near constant fraction of the card's peak as
-context grows.
+context grows. Peak is 256.0 GB/s (8001 MHz x 2 x 128 bit / 8).
 
 Prefill leads on short and mid length prompts and trails on long ones, where attention cost
 grows with the square of the prompt length.
@@ -88,11 +89,22 @@ Builds for Ada (compute 89) by default. Override with `-DRUNTHERDER_CUDA_ARCH=<a
 
 ## Run
 
+`<model>` is a directory holding a Hugging Face checkpoint.
+
 ```
-./build/runtherder ./models/Llama-3.2-3B-Instruct-quantized.w8a8 "What is a KV cache?"
+./build/runtherder <model> "What is a KV cache?"   one shot
+./build/runtherder <model> -cnv                    interactive chat
+```
+
+For example:
+
+```
+./build/runtherder ./models/Llama-3.2-3B-Instruct-quantized.w8a8 -cnv
 ```
 
 ```
+-cnv, --conversation   interactive chat, applies the checkpoint's chat template
+--system TEXT          system prompt, conversation mode only
 --prompt-file FILE     read the prompt from a file
 --max-tokens N         new tokens to generate
 --temperature F        0 is greedy
