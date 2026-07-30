@@ -1,34 +1,36 @@
 # Runtherder
 
-A CUDA inference engine for running Llama and Qwen models locally on a single consumer GPU.
-Written in C++20 and CUDA with no inference framework underneath.
+An LLM inference engine for consumer hardware. Written in C++20 and CUDA with no
+inference framework underneath.
 
-It loads a Hugging Face checkpoint, generates text, and is fast enough to compare against
+It loads a Hugging Face checkpoint, runs it on a single GPU, and is measured against
 llama.cpp.
 
 ## Features
 
 - Runs Llama 3 and Qwen 3 checkpoints straight from safetensors, single file or sharded.
-- Runs INT8 quantized checkpoints, weights and activations both.
+- Runs BF16, INT8 quantized, and mixed checkpoints. INT8 quantizes weights and
+  activations both.
 - FP8 KV cache, half the size of BF16.
-- Custom flash attention kernels for both prefill and decode.
+- Custom CUDA kernels for attention, RMSNorm, RoPE, SwiGLU, and quantization.
+  cuBLASLt does the GEMMs.
+- Flash attention on both the prefill and the decode path.
+- RoPE frequency scaling for long context checkpoints.
 - CUDA graphs on the decode path.
-- Sampling runs on the GPU: greedy, top k, top p.
+- Sampling runs on the GPU: greedy, top k, top p. Defaults come from the
+  checkpoint's generation_config.json.
 - Interactive chat that applies the checkpoint's own Jinja chat template.
 - Streaming output, and a server mode that keeps the model loaded.
 
 ## Performance
 
-
-| | |
-|---|---|
-| GPU | NVIDIA RTX 4070 Laptop, 8 GB |
-| OS | Windows 11, WSL2, Ubuntu 22.04 |
-| CUDA | 13.2 |
-| Model | Llama-3.2-3B-Instruct, INT8 W8A8 with a BF16 output head |
-| Compared against | llama.cpp `ff067f76d` (b10133), same model at Q8_0 |
-| Generation | 128 tokens per run, greedy |
-| Method | stock clocks, medians, Release build, warmed up |
+- **GPU**: NVIDIA RTX 4070 Laptop, 8 GB
+- **OS**: Windows 11, WSL2, Ubuntu 22.04
+- **CUDA**: 13.2
+- **Model**: Llama-3.2-3B-Instruct, INT8 W8A8 with a BF16 output head
+- **Compared against**: llama.cpp, same model at Q8_0
+- **Generation**: 128 tokens per run, greedy
+- **Method**: stock clocks, medians, Release build, warmed up
 
 ![prefill](docs/img/prefill.png)
 
@@ -120,9 +122,10 @@ Benchmarks: `uv run scripts/bench_sweep.py --runs 15`.
 
 ## Scope
 
-Single stream on one consumer GPU, for local use on a single machine. Further weight
-quantization (INT4), KV cache paging (paged attention), and a scheduler with continuous
-batching are planned.
+Single stream on one consumer GPU, for local use on a single machine. Llama 3 and Qwen 3
+are the architectures supported today. Further weight quantization (INT4), KV cache paging
+(paged attention), a scheduler with continuous batching, and additional architectures are
+planned.
 
 ## References
 
