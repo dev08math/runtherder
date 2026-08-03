@@ -46,6 +46,8 @@ __global__ void flash_prefill_kernel(__nv_bfloat16*       out,
     constexpr int QK_K = D / kMmaK;
     constexpr int QK_N = BC / kMmaN;
     constexpr int PV_N = D / kMmaN;
+    constexpr int PV_K = BC / kMmaK;
+    static_assert(BC % kMmaK == 0, "BC must be a whole number of PV mma steps");
     const int lane     = threadIdx.x & 31;
     const int warp_row = (threadIdx.x >> 5) * kMmaM;
     const int q_tile   = blockIdx.x;
@@ -113,10 +115,13 @@ __global__ void flash_prefill_kernel(__nv_bfloat16*       out,
         for (int kk = 0; kk < QK_K; ++kk) {
             FragmentA qf;
             device::load_q_fragment<D>(qf, smem_q, warp_row, kk * kMmaK);
-            FragmentB kf0, kf1;
-            device::load_kt_fragments<D>(kf0, kf1, smem_k, 0, kk * kMmaK);
-            device::mma(S[0], qf, kf0);
-            device::mma(S[1], qf, kf1);
+#pragma unroll
+            for (int kn = 0; kn < QK_N / 2; ++kn) {
+                FragmentB kf0, kf1;
+                device::load_kt_fragments<D>(kf0, kf1, smem_k, kn * kMmaK, kk * kMmaK);
+                device::mma(S[2 * kn], qf, kf0);
+                device::mma(S[2 * kn + 1], qf, kf1);
+            }
         }
 
         for (int n = 0; n < QK_N; ++n) {
@@ -170,17 +175,21 @@ __global__ void flash_prefill_kernel(__nv_bfloat16*       out,
             }
         }
 
-        FragmentA P;
-        P.reg[0] = cvt_f16x2(S[0].reg[0], S[0].reg[1]);
-        P.reg[1] = cvt_f16x2(S[0].reg[2], S[0].reg[3]);
-        P.reg[2] = cvt_f16x2(S[1].reg[0], S[1].reg[1]);
-        P.reg[3] = cvt_f16x2(S[1].reg[2], S[1].reg[3]);
+#pragma unroll
+        for (int kc = 0; kc < PV_K; ++kc) {
+            FragmentA P;
+            P.reg[0] = cvt_f16x2(S[2 * kc].reg[0], S[2 * kc].reg[1]);
+            P.reg[1] = cvt_f16x2(S[2 * kc].reg[2], S[2 * kc].reg[3]);
+            P.reg[2] = cvt_f16x2(S[2 * kc + 1].reg[0], S[2 * kc + 1].reg[1]);
+            P.reg[3] = cvt_f16x2(S[2 * kc + 1].reg[2], S[2 * kc + 1].reg[3]);
 
-        for (int n = 0; n < PV_N; n += 2) {
-            FragmentB vf0, vf1;
-            device::load_vt_fragments<D>(vf0, vf1, smem_v, 0, n * kMmaN);
-            device::mma(O[n], P, vf0);
-            device::mma(O[n + 1], P, vf1);
+#pragma unroll
+            for (int n = 0; n < PV_N; n += 2) {
+                FragmentB vf0, vf1;
+                device::load_vt_fragments<D>(vf0, vf1, smem_v, kc * kMmaK, n * kMmaN);
+                device::mma(O[n], P, vf0);
+                device::mma(O[n + 1], P, vf1);
+            }
         }
 
         __syncthreads();
@@ -220,7 +229,7 @@ void flash_prefill_bf16(__nv_bfloat16*       out,
 
     constexpr int D  = 128;
     constexpr int BR = 64;  // 4 warps, one 16 row M tile each
-    constexpr int BC = 16;
+    constexpr int BC = 64;
 
     const int  n_q_tiles = (n_new + BR - 1) / BR;
     const dim3 grid(static_cast<unsigned>(n_q_tiles), static_cast<unsigned>(num_q_heads));

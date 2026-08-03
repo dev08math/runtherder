@@ -63,6 +63,23 @@ context grows. Peak is 256.0 GB/s (8001 MHz x 2 x 128 bit / 8).
 Prefill leads on short and mid length prompts and trails on long ones, where attention cost
 grows with the square of the prompt length.
 
+### Quantization
+
+The same checkpoint at BF16 and at INT8 W8A8.
+
+| prompt tokens | prefill speedup | decode speedup |
+|---|---|---|
+| 35 | 1.55x | 1.58x |
+| 273 | 1.81x | 1.55x |
+| 511 | 1.72x | 1.56x |
+| 1021 | 1.81x | 1.57x |
+| 2041 | 1.70x | 1.55x |
+| 4761 | 1.45x | 1.55x |
+
+The INT8 checkpoint keeps a BF16 output head, 21.9 percent of its per token traffic, so
+the bandwidth ceiling is 1.78x rather than 2x.
+
+
 ### Memory
 
 Peak usage at 8192 context is 5039 MiB of the 8188 available:

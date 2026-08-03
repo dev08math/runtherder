@@ -58,7 +58,8 @@ class Model:
     model_type: str
     quant: str
     max_context: int
-    weight_bytes: int
+    weight_bytes: int  # VRAM budget
+    stream_bytes: int  # traffic per decode step
     kv_bytes: int
 
 
@@ -123,6 +124,31 @@ def safetensors_bytes(model_dir: Path) -> int:
     return total
 
 
+def tied_head_bytes(model_dir: Path, tied_embeddings: bool) -> int:
+    """embed_tokens size when that tensor doubles as the output projection. A tied
+    checkpoint shipping no lm_head reads it in full every decode step, so it counts
+    toward traffic even though safetensors_bytes drops it. Zero otherwise.
+
+    Traffic only. The VRAM budget keeps using weight_bytes, whose headroom factor is
+    calibrated against that figure."""
+    embed_bytes = 0
+    has_head = False
+    for shard in sorted(model_dir.glob("*.safetensors")):
+        with shard.open("rb") as fh:
+            header = json.loads(fh.read(struct.unpack("<Q", fh.read(8))[0]))
+        for name, meta in header.items():
+            if name == "__metadata__":
+                continue
+            has_head |= "lm_head" in name
+            if "embed_tokens" not in name:
+                continue
+            elems = 1
+            for dim in meta["shape"]:
+                elems *= dim
+            embed_bytes += elems * DTYPE_BYTES.get(meta["dtype"], 0)
+    return embed_bytes if tied_embeddings and not has_head else 0
+
+
 def load_model(model_dir: Path) -> Model:
     cfg = json.loads((model_dir / "config.json").read_text())
     model_type = cfg["model_type"]
@@ -137,12 +163,14 @@ def load_model(model_dir: Path) -> Model:
         + layers * kv_heads * 2 * DTYPE_BYTES[KV_SCALE_DTYPE]
     )
     quant = cfg.get("quantization_config", {}).get("quant_method", cfg.get("torch_dtype", "?"))
+    weight_bytes = safetensors_bytes(model_dir)
     return Model(
         path=model_dir,
         model_type=model_type,
         quant=quant,
         max_context=cfg["max_position_embeddings"],
-        weight_bytes=safetensors_bytes(model_dir),
+        weight_bytes=weight_bytes,
+        stream_bytes=weight_bytes + tied_head_bytes(model_dir, cfg.get("tie_word_embeddings", False)),
         kv_bytes=kv_bytes,
     )
 
@@ -243,7 +271,7 @@ def measure(binary: Path, model: Model, device: Device, repeats: int, args) -> R
 
     # Mean cache depth over the generation, the prompt plus half the output.
     depth = tokens + args.gen_len / 2.0
-    moved = model.weight_bytes + depth * model.kv_bytes
+    moved = model.stream_bytes + depth * model.kv_bytes
     return Row(
         prompt=tokens,
         depth=depth,
@@ -267,7 +295,7 @@ def write_banner(device: Device, model: Model, args) -> None:
     mode = "eager" if args.eager else "CUDA graph"
     sampler = "argmax" if args.temperature == 0 else f"temperature {args.temperature}"
     w(f"model:    {model.path.name}, {model.quant}, {KV_ELEM_DTYPE} KV, {mode}, {sampler}\n")
-    w(f"traffic:  {model.weight_bytes / 1e9:.3f} GB weights per token, "
+    w(f"traffic:  {model.stream_bytes / 1e9:.3f} GB weights per token, "
       f"{model.kv_bytes} B KV per cached token\n\n")
     w(f"{'prompt':<7} {'prefill tok/s':<21} {'TTFT s':<8} {'decode tok/s':<21} "
       f"{'TPOT ms':<8} {'GB/s':<7} {'MBU':<6}\n")
