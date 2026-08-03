@@ -76,8 +76,7 @@ The same checkpoint at BF16 and at INT8 W8A8.
 | 2041 | 1.70x | 1.55x |
 | 4761 | 1.45x | 1.55x |
 
-The INT8 checkpoint keeps a BF16 output head, 21.9 percent of its per token traffic, so
-the bandwidth ceiling is 1.78x rather than 2x.
+The INT8 checkpoint keeps a BF16 output head, 21.9 percent of its per token traffic.
 
 
 ### Memory
