@@ -16,9 +16,6 @@ namespace runtherder::model {
 
 namespace {
 
-// Discriminator for "could these hold the same bytes": size, dtype, shape, and the
-// leading and trailing 8 bytes. Distinct weights differ at the edges, so the full
-// compare below runs only for a real candidate.
 [[nodiscard]] std::string payload_key(std::span<const std::byte>      src,
                                       DType                           dtype,
                                       const std::vector<std::size_t>& shape) {

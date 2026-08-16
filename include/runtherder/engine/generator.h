@@ -1,6 +1,7 @@
 #pragma once
 
 #include <span>
+#include <vector>
 
 #include <runtherder/device/graph.cuh>
 #include <runtherder/engine/context.h>
@@ -33,6 +34,8 @@ public:
      * @param seq     sampling params and stop condition, advanced per token
      * @param prompt  tokens to prefill, non empty
      * @param sink    receives each token, flushed at the end
+     * @note One sequence, so the cache always belongs to the most recent call.
+     *       Anything else writing the KV cache between calls breaks the reuse.
      */
     void generate(SequenceState& seq, std::span<const int> prompt, OutputSink& sink);
 
@@ -46,6 +49,8 @@ private:
     // Where the captured graph writes its logits. Valid across replays only
     // because every decode carves the arena identically.
     model::Logits             decode_logits_{nullptr, 0};
+    // Tokens whose KV rows are resident, prompt then generated, in cache order.
+    std::vector<int>          resident_;
 };
 
 }  // namespace runtherder::engine

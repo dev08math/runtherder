@@ -1,14 +1,31 @@
 #include <runtherder/engine/generator.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <span>
 #include <vector>
 
 #include <cuda_runtime.h>
 
+#include <runtherder/check.h>
 #include <runtherder/device/check.cuh>
 #include <runtherder/model/architecture.h>
 
 namespace runtherder::engine {
+
+namespace {
+
+[[nodiscard]] std::size_t reusable_prefix(const std::vector<int>& resident,
+                                          std::span<const int>    prompt) {
+    const std::size_t limit = std::min(resident.size(), prompt.size() - 1);
+    std::size_t       i     = 0;
+    while (i < limit && resident[i] == prompt[i]) {
+        ++i;
+    }
+    return i;
+}
+
+}  // namespace
 
 Generator::Generator(model::ModelArchitecture& model,
                      EngineContext&            ctx,
@@ -17,8 +34,13 @@ Generator::Generator(model::ModelArchitecture& model,
     : model_(model), ctx_(ctx), sampler_(sampler), enforce_eager_(enforce_eager) {}
 
 void Generator::generate(SequenceState& seq, std::span<const int> prompt, OutputSink& sink) {
-    std::vector<int> input(prompt.begin(), prompt.end());
-    int              start_pos    = 0;
+    RUNTHERDER_CHECK(!prompt.empty(), "generate needs a non empty prompt");
+
+    const std::size_t reuse = reusable_prefix(resident_, prompt);
+
+    std::vector<int> resident(prompt.begin(), prompt.end());
+    std::vector<int> input(prompt.begin() + static_cast<std::ptrdiff_t>(reuse), prompt.end());
+    int              start_pos    = static_cast<int>(reuse);
     int              decode_steps = 0;
 
     for (;;) {
@@ -64,7 +86,10 @@ void Generator::generate(SequenceState& seq, std::span<const int> prompt, Output
         }
 
         input.assign(1, next);
+        resident.push_back(next);
     }
+
+    resident_ = std::move(resident);
 
     sink.flush();
 }
