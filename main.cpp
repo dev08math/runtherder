@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iostream>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -61,45 +62,94 @@ public:
     void flush() override { std::fflush(stdout); }
 };
 
-// Decodes the whole reply each step and emits only the new bytes. A token can
-// end mid character, which decodes to U+FFFD until the next token completes it,
-// so a held back replacement suffix is never printed.
 class ChatStreamSink final : public eng::OutputSink {
 public:
-    explicit ChatStreamSink(runtherder::tokenizer::Tokenizer& tok) : tok_{tok} {}
+    ChatStreamSink(runtherder::tokenizer::Tokenizer& tok, bool show_reasoning)
+        : tok_{tok},
+          show_reasoning_{show_reasoning},
+          think_open_{probe_single(tok, "<think>")},
+          think_close_{probe_single(tok, "</think>")} {}
 
     void on_token([[maybe_unused]] int seq_id, int token_id) override {
         ids_.push_back(token_id);
+        if (token_id == think_open_) {
+            in_reasoning_ = true;
+        }
+        const bool closing = token_id == think_close_ && in_reasoning_;
+        if (closing) {
+            in_reasoning_ = false;
+            answer_start_ = ids_.size();
+        }
 
         const std::string text = tok_.decode(ids_);
         std::string_view  ready{text};
         while (ready.ends_with(kReplacement)) {
             ready.remove_suffix(kReplacement.size());
         }
-        if (ready.size() <= shown_.size()) {
+        if (ready.size() <= shown_) {
             return;
         }
 
-        std::fwrite(ready.data() + shown_.size(), 1, ready.size() - shown_.size(), stdout);
+        std::string_view fresh = ready.substr(shown_);
+        shown_                 = ready.size();
+
+        if (!show_reasoning_ && (in_reasoning_ || closing)) {
+            return;
+        }
+        if (!show_reasoning_ && !answer_open_) {
+            while (!fresh.empty() && (fresh.front() == '\n' || fresh.front() == ' ')) {
+                fresh.remove_prefix(1);
+            }
+            if (fresh.empty()) {
+                return;
+            }
+            answer_open_ = true;
+        }
+
+        std::fwrite(fresh.data(), 1, fresh.size(), stdout);
         std::fflush(stdout);
-        shown_ = ready;
     }
 
     void flush() override { std::fflush(stdout); }
 
-    [[nodiscard]] const std::string& text() const noexcept { return shown_; }
+    /// @brief The reply with any reasoning block removed.
+    [[nodiscard]] std::string text() const {
+        return tok_.decode(std::span<const int>{ids_}.subspan(answer_start_));
+    }
+
+    [[nodiscard]] std::size_t reasoning_tokens() const noexcept { return answer_start_; }
+    [[nodiscard]] std::size_t answer_tokens() const noexcept {
+        return ids_.size() - answer_start_;
+    }
 
     void reset() {
         ids_.clear();
-        shown_.clear();
+        shown_        = 0;
+        answer_start_ = 0;
+        in_reasoning_ = false;
+        answer_open_  = false;
     }
 
 private:
     static constexpr std::string_view kReplacement = "\xEF\xBF\xBD";
 
+    // A checkpoint that marks its reasoning block with added tokens encodes
+    // each tag to a single id.
+    [[nodiscard]] static int probe_single(runtherder::tokenizer::Tokenizer& tok,
+                                          std::string_view                  tag) {
+        const std::vector<int> ids = tok.encode(tag);
+        return ids.size() == 1 ? ids.front() : -1;
+    }
+
     runtherder::tokenizer::Tokenizer& tok_;
+    bool                              show_reasoning_;
+    int                               think_open_;
+    int                               think_close_;
     std::vector<int>                  ids_;
-    std::string                       shown_;
+    std::size_t                       shown_        = 0;
+    std::size_t                       answer_start_ = 0;
+    bool                              in_reasoning_ = false;
+    bool                              answer_open_  = false;
 };
 
 struct CliArgs {
@@ -117,6 +167,7 @@ struct CliArgs {
     bool                                 stream        = false;
     bool                                 serve         = false;
     bool                                 conversation  = false;
+    bool                                 show_reasoning = false;
     std::optional<std::string>           system_prompt;
 };
 
@@ -147,6 +198,8 @@ CliArgs parse_args(int argc, char** argv) {
     app.add_flag("-cnv,--conversation", args.conversation,
                  "interactive chat, applies the checkpoint's chat template");
     app.add_option("--system", args.system_prompt, "system prompt, conversation mode only");
+    app.add_flag("--show-reasoning", args.show_reasoning,
+                 "print the model's reasoning block, conversation mode only");
 
     try {
         app.parse(argc, argv);
@@ -228,7 +281,7 @@ void run_chat(const CliArgs& args) {
     const tk::ChatTemplate tmpl      = tk::ChatTemplate::load(args.model_dir);
 
     eng::Engine    engine = make_interactive_engine(args, max_len);
-    ChatStreamSink sink(tokenizer);
+    ChatStreamSink sink(tokenizer, args.show_reasoning);
 
     std::vector<tk::Message> messages;
     if (args.system_prompt) {
@@ -269,7 +322,12 @@ void run_chat(const CliArgs& args) {
         const int budget = args.max_tokens.value_or(static_cast<int>(max_len - ids.size()));
         eng::SequenceState seq = engine.make_sequence(static_cast<int>(ids.size()), budget);
         engine.generate(seq, ids, sink);
-        std::fputs("\n\n", stdout);
+        std::fputs("\n", stdout);
+        if (sink.reasoning_tokens() > 0) {
+            std::printf("[reasoning %zu tokens, answer %zu tokens]\n",
+                        sink.reasoning_tokens(), sink.answer_tokens());
+        }
+        std::fputs("\n", stdout);
 
         messages.push_back({tk::Role::Assistant, sink.text()});
     }
