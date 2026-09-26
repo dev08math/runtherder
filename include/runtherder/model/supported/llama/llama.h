@@ -92,8 +92,8 @@ private:
  * @brief Weights of one transformer block in the Llama style layout: the
  *        attention and FFN norms, the Q/K/V/O projections, and the gate/up/down
  *        MLP projections.
- * @note q_norm and k_norm are populated only by architectures that carry them,
- *       and stay nullopt otherwise.
+ * @note q_norm, k_norm and the q/k/v biases are populated only by architectures
+ *       that carry them, and stay nullopt otherwise.
  */
 struct LlamaLayerWeights {
     Tensor attn_norm;
@@ -105,6 +105,10 @@ struct LlamaLayerWeights {
 
     std::optional<Tensor> q_norm;
     std::optional<Tensor> k_norm;
+
+    std::optional<Tensor> q_bias;
+    std::optional<Tensor> k_bias;
+    std::optional<Tensor> v_bias;
 
     Tensor ffn_norm;
 

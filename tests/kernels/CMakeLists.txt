@@ -93,3 +93,15 @@ target_link_libraries(test_flash_prefill PRIVATE
     GTest::gtest_main
 )
 gtest_discover_tests(test_flash_prefill)
+
+add_executable(test_bias test_bias.cpp)
+set_target_properties(test_bias PROPERTIES
+    LANGUAGE CUDA
+)
+set_source_files_properties(test_bias.cpp PROPERTIES LANGUAGE CUDA)
+target_link_libraries(test_bias PRIVATE
+    runtherder_headers
+    runtherder_kernels
+    GTest::gtest_main
+)
+gtest_discover_tests(test_bias)

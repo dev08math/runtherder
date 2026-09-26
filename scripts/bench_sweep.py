@@ -23,7 +23,7 @@ KV_ELEM_DTYPE = "F8_E4M3"
 KV_SCALE_DTYPE = "F32"
 
 # Mirrors model_type_registry() in src/model/config.cpp.
-SUPPORTED_MODEL_TYPES = ("llama", "qwen3")
+SUPPORTED_MODEL_TYPES = ("llama", "qwen2", "qwen3")
 
 PARA = (
     "The history of computing spans many centuries and involves countless inventors, "

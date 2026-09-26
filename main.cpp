@@ -420,6 +420,8 @@ void run_generate(const CliArgs& args) {
         DiscardSink        warm_sink;
         engine.generate(warm_seq, ids, warm_sink);
     }
+    // Warmup ran the same ids. Without this the timed run prefills one token.
+    engine.forget_resident();
 
     TimingSink sink;
     const auto t0 = std::chrono::steady_clock::now();

@@ -39,6 +39,10 @@ public:
      */
     void generate(SequenceState& seq, std::span<const int> prompt, OutputSink& sink);
 
+    void forget_resident() noexcept {
+        resident_.clear();
+    }
+
 private:
     model::ModelArchitecture& model_;
     EngineContext&            ctx_;

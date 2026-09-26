@@ -7,6 +7,7 @@
 namespace runtherder::model {
 
 enum class ModelType {
+    Qwen2,
     Qwen3,
     Llama3,
 };

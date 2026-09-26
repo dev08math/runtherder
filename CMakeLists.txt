@@ -92,6 +92,7 @@ add_library(runtherder_kernels STATIC
     src/kernels/flash_decode.cu
     src/kernels/flash_prefill.cu
     src/kernels/quantization.cu
+    src/kernels/bias.cu
 )
 set_target_properties(runtherder_kernels PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
@@ -153,6 +154,7 @@ add_library(runtherder_model STATIC
     src/model/generation_config.cpp
     src/model/upload.cu
     src/model/supported/llama/llama.cu
+    src/model/supported/llama/qwen2.cu
     src/model/supported/llama/qwen3.cu
     src/model/supported/llama/llama3.cu
 )

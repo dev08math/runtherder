@@ -69,6 +69,10 @@ public:
         generator_.generate(seq, prompt, sink);
     }
 
+    void forget_resident() noexcept {
+        generator_.forget_resident();
+    }
+
     /**
      * @brief Builds a sequence carrying the resolved sampling params and the
      *        model's EOS token set.

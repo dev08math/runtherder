@@ -17,6 +17,7 @@
 #include <runtherder/device/check.cuh>
 #include <runtherder/io/json_helpers.h>
 #include <runtherder/model/supported/llama/llama3.h>
+#include <runtherder/model/supported/llama/qwen2.h>
 #include <runtherder/model/supported/llama/qwen3.h>
 #include <runtherder/model/upload.cuh>
 
@@ -65,12 +66,15 @@ LlamaConfig LlamaConfig::load(const std::filesystem::path& model_dir) {
 
     const auto num_heads        = io::require_field<std::size_t>(cfg, "num_attention_heads");
     const auto num_kv_heads     = io::require_field<std::size_t>(cfg, "num_key_value_heads");
-    const auto head_dim         = io::require_field<std::size_t>(cfg, "head_dim");
+    RUNTHERDER_CHECK(num_heads > 0, "num_attention_heads must be positive");
+    // Qwen2 omits head_dim. Transformers derives it as hidden_size / num_heads.
+    const auto head_dim = cfg.contains("head_dim")
+                              ? io::require_field<std::size_t>(cfg, "head_dim")
+                              : base.hidden_dim() / num_heads;
     const auto intermediate_dim = io::require_field<std::size_t>(cfg, "intermediate_size");
     const auto rms_norm_eps     = io::require_field<float>(cfg, "rms_norm_eps");
     const auto rope_theta       = io::require_field<float>(cfg, "rope_theta");
 
-    RUNTHERDER_CHECK(num_heads > 0,        "num_attention_heads must be positive");
     RUNTHERDER_CHECK(num_kv_heads > 0,     "num_key_value_heads must be positive");
     RUNTHERDER_CHECK(num_heads % num_kv_heads == 0,
                      "num_key_value_heads must divide num_attention_heads");
@@ -202,6 +206,8 @@ void linear(kernels::Matmul&           matmul,
 
 LlamaWeights LlamaWeights::load(const ShardedSafetensors& reader, const LlamaConfig& config) {
     switch (config.base().model_type()) {
+        case ModelType::Qwen2:
+            return qwen2::arrange(upload_all(reader), config);
         case ModelType::Qwen3:
             return qwen3::arrange(upload_all(reader), config);
         case ModelType::Llama3:
@@ -216,6 +222,8 @@ std::size_t llama_scratch_bytes(const LlamaConfig&  config,
                                 std::size_t         max_batch_tokens) {
     const bool quantized = has_quantized_weights(weights);
     switch (config.base().model_type()) {
+        case ModelType::Qwen2:
+            return qwen2::scratch_bytes(config, max_batch_tokens, quantized);
         case ModelType::Qwen3:
             return qwen3::scratch_bytes(config, max_batch_tokens, quantized);
         case ModelType::Llama3:
@@ -272,6 +280,9 @@ Logits LlamaModel::forward(engine::EngineContext& ctx, cudaStream_t stream) {
     RUNTHERDER_CHECK(staged_n_ >= 1, "forward called before stage");
 
     switch (config_.base().model_type()) {
+        case ModelType::Qwen2:
+            return qwen2::forward(weights_, config_, scratch_, staging_.get(),
+                                  positions_.get(), ctx, staged_n_, stream);
         case ModelType::Qwen3:
             return qwen3::forward(weights_, config_, scratch_, staging_.get(),
                                   positions_.get(), ctx, staged_n_, stream);

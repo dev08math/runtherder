@@ -21,6 +21,7 @@ constexpr std::string_view kConfigFileName = "config.json";
 [[nodiscard]] const auto& model_type_registry() {
     static const std::unordered_map<std::string, ModelType,
                                     TransparentStringHash, std::equal_to<>> table{
+        {"qwen2", ModelType::Qwen2},
         {"qwen3", ModelType::Qwen3},
         {"llama", ModelType::Llama3},
     };
